@@ -1,6 +1,6 @@
 {
   "name": "@lajna/mtcli",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "The tool of the tool of the tool",
   "main": "index.js",
   "scripts": {
@@ -9,21 +9,21 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bywachira/html-serve.git"
+    "url": "git+https://github.com/LajnaLegenden/transpiler4.git"
   },
   "keywords": ["cli", "automation"],
-  "author": "tesh254",
+  "author": "LajnaLegenden",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/bywachira/html-serve/issues"
+    "url": "https://github.com/LajnaLegenden/transpiler4/issues"
   },
-  "homepage": "https://github.com/bywachira/html-serve#readme",
+  "homepage": "https://github.com/LajnaLegenden/transpiler4#readme",
   "dependencies": {
     "go-npm": "^0.1.9"
   },
   "goBinary": {
     "name": "mtcli",
     "path": "./bin",
-    "url": "https://github.com/LajnaLegenden/transpiler4/releases/download/v{{version}}/mtcli_{{version}}_{{platform}}_{{arch}}.tar.gz"
+    "url": "https://github.com/LajnaLegenden/transpiler4/releases/download/v{{version}}/transpiler4_{{version}}_{{platform}}_{{arch}}.tar.gz"
   }
 }
