@@ -1,11 +1,14 @@
 {
   "name": "@lajna/mtcli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "The tool of the tool of the tool",
   "main": "index.js",
   "scripts": {
     "postinstall": "go-npm install",
-    "preuninstall": "go-npm uninstall"
+    "preuninstall": "go-npm uninstall",
+    "patch": "npm version patch && npm publish --access public",
+    "minor": "npm version minor && npm publish --access public",
+    "major": "npm version major && npm publish --access public"
   },
   "repository": {
     "type": "git",
