@@ -1,0 +1,29 @@
+{
+  "name": "@lajna/mtcli",
+  "version": "1.0.0",
+  "description": "The tool of the tool of the tool",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "go-npm install",
+    "preuninstall": "go-npm uninstall"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bywachira/html-serve.git"
+  },
+  "keywords": ["cli", "automation"],
+  "author": "tesh254",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/bywachira/html-serve/issues"
+  },
+  "homepage": "https://github.com/bywachira/html-serve#readme",
+  "dependencies": {
+    "go-npm": "^0.1.9"
+  },
+  "goBinary": {
+    "name": "mtcli",
+    "path": "./bin",
+    "url": "https://github.com/LajnaLegenden/transpiler4/releases/download/v{{version}}/mtcli_{{version}}_{{platform}}_{{arch}}.tar.gz"
+  }
+}
