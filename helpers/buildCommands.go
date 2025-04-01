@@ -72,14 +72,26 @@ func GetBuildCommand(pkg NodePackage, webappPath string) []string {
 		}
 	}
 	if pkg.Strategy == "AMEND_NATIVE" {
-		return []string{
-			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/lib",
-			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/boundaries",
-			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/amend",
-			"cp -R lib " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
-			"cp -R boundaries " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
-			"cp -R amend " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
+		commands := []string{}
+
+		// Remove old folders first
+		commands = append(commands,
+			"rm -rf "+webappPath+"/node_modules/"+pkg.PackageJson.Name+"/lib",
+			"rm -rf "+webappPath+"/node_modules/"+pkg.PackageJson.Name+"/boundaries",
+			"rm -rf "+webappPath+"/node_modules/"+pkg.PackageJson.Name+"/amend")
+
+		// Only copy folders if they exist
+		if pkg.FolderItems["lib"] {
+			commands = append(commands, "cp -R lib "+webappPath+"/node_modules/"+pkg.PackageJson.Name)
 		}
+		if pkg.FolderItems["boundaries"] {
+			commands = append(commands, "cp -R boundaries "+webappPath+"/node_modules/"+pkg.PackageJson.Name)
+		}
+		if pkg.FolderItems["amend"] {
+			commands = append(commands, "cp -R amend "+webappPath+"/node_modules/"+pkg.PackageJson.Name)
+		}
+
+		return commands
 	}
 	if pkg.Strategy == "MAKEFILE_BUILD" {
 		return []string{
@@ -87,7 +99,6 @@ func GetBuildCommand(pkg NodePackage, webappPath string) []string {
 		}
 	}
 	if pkg.Strategy == "TRANSPILED_LEGACY" {
-		beeep.Notify("Build failed", "TRANSPILED_LEGACY is not supported yet", "")
 		return []string{
 			"pnpm prepublishOnly",
 			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/dist",
