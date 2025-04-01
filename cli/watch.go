@@ -4,18 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/urfave/cli/v2"
 
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
-
 	"github.com/LajnaLegenden/transpiler4/helpers"
+	"github.com/LajnaLegenden/transpiler4/logsocket"
 )
 
 // WatchCommand returns the CLI command for the watch operation
@@ -48,6 +48,18 @@ func WatchAction(c *cli.Context) error {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
+	// Start the log socket server
+	port, err := logsocket.StartServer()
+	if err != nil {
+		return fmt.Errorf("failed to start log socket server: %w", err)
+	}
+	fmt.Printf("Log viewer available at http://localhost:%d\n", port)
+
+	// Redirect standard logger output to our WebSocket writer
+	originalLogger := log.Writer()
+	logWriter := logsocket.NewLogWriter(originalLogger)
+	log.SetOutput(logWriter)
+
 	packages, err := helpers.FindNodePackages(projectPath)
 	if err != nil {
 		log.Fatal("Error selecting packages: ", err)
@@ -65,6 +77,8 @@ func WatchAction(c *cli.Context) error {
 	go func() {
 		<-signalChan
 		fmt.Println("\nReceived an interrupt, stopping...")
+		// Stop the log socket server before exiting
+		logsocket.StopServer()
 		close(stopChan)
 	}()
 

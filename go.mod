@@ -2,7 +2,10 @@ module github.com/LajnaLegenden/transpiler4
 
 go 1.24.1
 
-require github.com/urfave/cli/v2 v2.27.6
+require (
+	github.com/gorilla/websocket v1.5.3
+	github.com/urfave/cli/v2 v2.27.6
+)
 
 require (
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4 // indirect
