@@ -47,12 +47,12 @@ func GetBuildCommand(pkg NodePackage, webappPath string) []string {
 	}
 	if pkg.Strategy == "AMEND_NATIVE" {
 		return []string{
-			"rm -rf " + webappPath + "/node_modules/@mediatool/mt-utils/lib",
-			"rm -rf " + webappPath + "/node_modules/@mediatool/mt-utils/boundaries",
-			"rm -rf " + webappPath + "/node_modules/@mediatool/mt-utils/amend",
-			"cp -R lib " + webappPath + "/node_modules/@mediatool/mt-utils",
-			"cp -R boundaries " + webappPath + "/node_modules/@mediatool/mt-utils",
-			"cp -R amend " + webappPath + "/node_modules/@mediatool/mt-utils",
+			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/lib",
+			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/boundaries",
+			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/amend",
+			"cp -R lib " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
+			"cp -R boundaries " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
+			"cp -R amend " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
 		}
 	}
 	if pkg.Strategy == "MAKEFILE_BUILD" {
