@@ -4,8 +4,8 @@
   "description": "The tool of the tool of the tool",
   "main": "index.js",
   "scripts": {
-    "postinstall": "go-npm install",
-    "preuninstall": "go-npm uninstall",
+    "postinstall": "golang-npm install",
+    "preuninstall": "golang-npm uninstall",
     "patch": "npm version patch && npm publish --access public",
     "minor": "npm version minor && npm publish --access public",
     "major": "npm version major && npm publish --access public"
@@ -25,7 +25,8 @@
   },
   "homepage": "https://github.com/LajnaLegenden/transpiler4#readme",
   "dependencies": {
-    "go-npm": "^0.1.9"
+    "go-npm": "^0.1.9",
+    "golang-npm": "^0.0.6"
   },
   "goBinary": {
     "name": "mtcli",
