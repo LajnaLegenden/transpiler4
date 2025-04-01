@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gen2brain/beeep"
 	"github.com/ktr0731/go-fuzzyfinder"
 )
 
@@ -305,4 +306,12 @@ func GetBuildablePackages(packages []NodePackage) []NodePackage {
 		}
 	}
 	return buildablePackages
+}
+
+func SendNotification(title string, message string) error {
+	err := beeep.Notify(title, message, "")
+	if err != nil {
+		log.Println("Error sending notification:", err)
+	}
+	return err
 }
