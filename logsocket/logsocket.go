@@ -240,7 +240,7 @@ func serveHTML(w http.ResponseWriter) {
 <body class="bg-gray-100 min-h-screen">
     <div id="app" class="container mx-auto px-4 py-8">
         <header class="mb-6">
-            <h1 class="text-3xl font-bold text-gray-800">Transpiler4 Build Logs</h1>
+            <h1 class="text-3xl font-bold text-gray-800">MTCLI Build Logs</h1>
             <p class="text-gray-600">Real-time build logs from watch mode</p>
         </header>
         
@@ -248,11 +248,11 @@ func serveHTML(w http.ResponseWriter) {
             <div class="flex justify-between items-center mb-2">
                 <h2 class="text-xl font-semibold text-gray-700">Live Build Logs</h2>
                 <div class="flex items-center">
-                    <span class="flex h-3 w-3 relative mr-2">
+                    <span class="flex h-4 w-4 relative mr-2">
                         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                        <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                        <span class="relative inline-flex rounded-full h-4 w-4 bg-green-500"></span>
                     </span>
-                    <span class="text-sm text-gray-500">{{ connectionStatus }}</span>
+                    <span class="text-sm font-medium text-gray-600">{{ connectionStatus }}</span>
                 </div>
             </div>
             
@@ -342,7 +342,7 @@ func serveHTML(w http.ResponseWriter) {
                 // Format timestamp
                 const formatTime = (timestamp) => {
                     const date = new Date(timestamp);
-                    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
                 };
                 
                 // Clear all logs
