@@ -43,7 +43,6 @@ func RunCommandWithLogger(ctx context.Context, command string, path string, logg
 		cmd.Dir = path
 		cmd.Stdout = logger.Writer()
 		cmd.Stderr = logger.Writer()
-		logger.Println(cmd.String())
 
 		err := cmd.Run()
 		if err != nil {
@@ -129,7 +128,6 @@ func BuildPackageWithLogger(ctx context.Context, pkg NodePackage, webappPath str
 	//Store start time
 	startTime := time.Now()
 	beeep.Notify("Build started", pkg.PackageJson.Name+" build started", "")
-	logger.Printf("Build started for package %s", pkg.PackageJson.Name)
 
 	for _, command := range commands {
 		err := RunCommandWithLogger(ctx, command, pkg.Path, logger)
@@ -140,6 +138,5 @@ func BuildPackageWithLogger(ctx context.Context, pkg NodePackage, webappPath str
 
 	duration := time.Since(startTime).String()
 	beeep.Notify("Build completed", pkg.PackageJson.Name+" completed in "+duration, "")
-	logger.Printf("Build completed for package %s in %s", pkg.PackageJson.Name, duration)
 	return nil
 }
