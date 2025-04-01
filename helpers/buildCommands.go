@@ -23,8 +23,10 @@ func RunCommand(ctx context.Context, command string, path string) error {
 
 		err := cmd.Run()
 		if err != nil {
-			beeep.Notify("Build failed", err.Error(), "")
+          if err.Error() != "context: canceled" {
+			beeep.Notify("Running command failed", err.Error(), "")
 			return err
+          }
 		}
 		return nil
 	}
@@ -63,7 +65,9 @@ func GetBuildCommand(pkg NodePackage, webappPath string) []string {
 	if pkg.Strategy == "TRANSPILED_LEGACY" {
 		beeep.Notify("Build failed", "TRANSPILED_LEGACY is not supported yet", "")
 		return []string{
-			"echo 'TRANSPILED_LEGACY'",
+			"pnpm prepublishOnly",
+			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/dist",
+			"cp -R " + pkg.Path + "/dist " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
 		}
 	}
 	return []string{}
@@ -80,6 +84,6 @@ func BuildPackage(ctx context.Context, pkg NodePackage, webappPath string) error
 			return err
 		}
 	}
-	beeep.Notify("Build completed", pkg.PackageJson.Name+" build completed in "+time.Since(startTime).String(), "")
+	beeep.Notify("Build completed", pkg.PackageJson.Name+" completed in "+time.Since(startTime).String(), "")
 	return nil
 }
