@@ -55,10 +55,10 @@ func WatchAction(c *cli.Context) error {
 	}
 	fmt.Printf("Log viewer available at http://localhost:%d\n", port)
 
-	// Redirect standard logger output to our WebSocket writer
+	// Create a global log writer for non-package specific logs
 	originalLogger := log.Writer()
-	logWriter := logsocket.NewLogWriter(originalLogger)
-	log.SetOutput(logWriter)
+	globalLogWriter := logsocket.NewLogWriter(originalLogger, "System")
+	log.SetOutput(globalLogWriter)
 
 	packages, err := helpers.FindNodePackages(projectPath)
 	if err != nil {
@@ -76,14 +76,14 @@ func WatchAction(c *cli.Context) error {
 
 	go func() {
 		<-signalChan
-		fmt.Println("\nReceived an interrupt, stopping...")
+		log.Println("\nReceived an interrupt, stopping...")
 		// Stop the log socket server before exiting
 		logsocket.StopServer()
 		close(stopChan)
 	}()
 
 	for _, pkg := range selectedPackages {
-		fmt.Printf("Selected package: %s\n", pkg.PackageJson.Name)
+		log.Printf("Selected package: %s\n", pkg.PackageJson.Name)
 		wg.Add(1)
 		go watchForChanges(&wg, stopChan, pkg, projectPath+"/webapp")
 	}
@@ -120,15 +120,19 @@ func addDirsToWatcher(watcher *fsnotify.Watcher, rootPath string) error {
 func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, pkg helpers.NodePackage, webappPath string) {
 	defer wg.Done()
 
+	// Create a package-specific logger
+	packageName := pkg.PackageJson.Name
+	packageLogger := log.New(logsocket.NewLogWriter(os.Stdout, packageName), "", log.LstdFlags)
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("Failed to create watcher: %v", err)
+		packageLogger.Fatalf("Failed to create watcher: %v", err)
 	}
 	defer watcher.Close()
-	log.Printf("Watching for changes in package: %s", pkg.Path)
+	packageLogger.Printf("Watching for changes in package: %s", pkg.Path)
 
 	if err := addDirsToWatcher(watcher, pkg.Path); err != nil {
-		log.Fatalf("Failed to walk through directories: %v", err)
+		packageLogger.Fatalf("Failed to walk through directories: %v", err)
 	}
 
 	buildChan := make(chan struct{}, 1)
@@ -139,33 +143,33 @@ func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, pkg helpers.N
 	var debounceTimer *time.Timer
 	debounceTimeout := 1000 * time.Millisecond // Configurable debounce delay
 
-	go handleBuilds(ctx, buildChan, pkg, webappPath)
+	go handleBuilds(ctx, buildChan, pkg, webappPath, packageLogger)
 
 	for {
 		select {
 		case <-stopChan:
-			log.Printf("Stopping watcher for package: %s", pkg.PackageJson.Name)
+			packageLogger.Printf("Stopping watcher for package: %s", pkg.PackageJson.Name)
 			return
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
 			}
-			handleEvent(event, buildChan, &ctx, &cancel, pkg, webappPath, &debounceTimer, debounceTimeout)
+			handleEvent(event, buildChan, &ctx, &cancel, pkg, webappPath, &debounceTimer, debounceTimeout, packageLogger)
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return
 			}
-			log.Printf("Watcher error: %v", err)
+			packageLogger.Printf("Watcher error: %v", err)
 		}
 	}
 }
 
 func handleEvent(event fsnotify.Event, buildChan chan struct{}, ctx *context.Context,
 	cancel *context.CancelFunc, pkg helpers.NodePackage, webappPath string,
-	debounceTimer **time.Timer, debounceTimeout time.Duration) {
-	log.Printf("Event: %s %s", event.Op.String(), event.Name)
+	debounceTimer **time.Timer, debounceTimeout time.Duration, logger *log.Logger) {
+	logger.Printf("Event: %s %s", event.Op.String(), event.Name)
 	if event.Op&fsnotify.Write == fsnotify.Write {
-		log.Printf("File %s has been modified", event.Name)
+		logger.Printf("File %s has been modified", event.Name)
 
 		// If there's an existing timer, stop it
 		if *debounceTimer != nil {
@@ -174,25 +178,25 @@ func handleEvent(event fsnotify.Event, buildChan chan struct{}, ctx *context.Con
 
 		// Create a new timer
 		*debounceTimer = time.AfterFunc(debounceTimeout, func() {
-			log.Printf("Debounce timer expired, triggering build for %s", pkg.PackageJson.Name)
+			logger.Printf("Debounce timer expired, triggering build for %s", pkg.PackageJson.Name)
 			select {
 			case buildChan <- struct{}{}:
 			default:
 				// If we can't send to buildChan, reset the build context
 				(*cancel)()
 				*ctx, *cancel = context.WithCancel(context.Background())
-				go handleBuilds(*ctx, buildChan, pkg, webappPath)
+				go handleBuilds(*ctx, buildChan, pkg, webappPath, logger)
 			}
 		})
 	}
 }
 
-func handleBuilds(ctx context.Context, buildChan <-chan struct{}, pkg helpers.NodePackage, webappPath string) {
+func handleBuilds(ctx context.Context, buildChan <-chan struct{}, pkg helpers.NodePackage, webappPath string, logger *log.Logger) {
 	for range buildChan {
-		log.Printf("Starting build for package: %s", pkg.PackageJson.Name)
-		err := helpers.BuildPackage(ctx, pkg, webappPath)
+		logger.Printf("Starting build for package: %s", pkg.PackageJson.Name)
+		err := helpers.BuildPackageWithLogger(ctx, pkg, webappPath, logger)
 		if err != nil {
-			log.Printf("Build failed: %v", err)
+			logger.Printf("Build failed: %v", err)
 		}
 	}
 }

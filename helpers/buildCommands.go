@@ -23,10 +23,34 @@ func RunCommand(ctx context.Context, command string, path string) error {
 
 		err := cmd.Run()
 		if err != nil {
-          if err.Error() != "context: canceled" {
-			beeep.Notify("Running command failed", err.Error(), "")
-			return err
-          }
+			if err.Error() != "context: canceled" {
+				beeep.Notify("Running command failed", err.Error(), "")
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// RunCommandWithLogger runs a command with a custom logger
+func RunCommandWithLogger(ctx context.Context, command string, path string, logger *log.Logger) error {
+	//dry run
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		cmd := exec.Command("sh", "-c", command)
+		cmd.Dir = path
+		cmd.Stdout = logger.Writer()
+		cmd.Stderr = logger.Writer()
+		logger.Println(cmd.String())
+
+		err := cmd.Run()
+		if err != nil {
+			if err.Error() != "context: canceled" {
+				beeep.Notify("Running command failed", err.Error(), "")
+				return err
+			}
 		}
 		return nil
 	}
@@ -85,5 +109,26 @@ func BuildPackage(ctx context.Context, pkg NodePackage, webappPath string) error
 		}
 	}
 	beeep.Notify("Build completed", pkg.PackageJson.Name+" completed in "+time.Since(startTime).String(), "")
+	return nil
+}
+
+// BuildPackageWithLogger builds a package using a custom logger
+func BuildPackageWithLogger(ctx context.Context, pkg NodePackage, webappPath string, logger *log.Logger) error {
+	commands := GetBuildCommand(pkg, webappPath)
+	//Store start time
+	startTime := time.Now()
+	beeep.Notify("Build started", pkg.PackageJson.Name+" build started", "")
+	logger.Printf("Build started for package %s", pkg.PackageJson.Name)
+
+	for _, command := range commands {
+		err := RunCommandWithLogger(ctx, command, pkg.Path, logger)
+		if err != nil {
+			return err
+		}
+	}
+
+	duration := time.Since(startTime).String()
+	beeep.Notify("Build completed", pkg.PackageJson.Name+" completed in "+duration, "")
+	logger.Printf("Build completed for package %s in %s", pkg.PackageJson.Name, duration)
 	return nil
 }

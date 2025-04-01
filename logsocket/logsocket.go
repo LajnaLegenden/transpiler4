@@ -1,6 +1,7 @@
 package logsocket
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,13 @@ import (
 	"github.com/LajnaLegenden/transpiler4/helpers"
 	"github.com/gorilla/websocket"
 )
+
+// LogMessage represents a structured log message
+type LogMessage struct {
+	Package string `json:"package"`
+	Message string `json:"message"`
+	Time    int64  `json:"time"`
+}
 
 var (
 	// Upgrader is used to upgrade HTTP connections to WebSocket connections
@@ -129,12 +137,18 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // broadcastMessage sends a message to all connected clients
-func broadcastMessage(message string) {
+func broadcastMessage(message LogMessage) {
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("Error marshaling log message: %v", err)
+		return
+	}
+
 	clientsMux.Lock()
 	defer clientsMux.Unlock()
 
 	for client := range clients {
-		err := client.WriteMessage(websocket.TextMessage, []byte(message))
+		err := client.WriteMessage(websocket.TextMessage, jsonData)
 		if err != nil {
 			log.Printf("Error sending message to client: %v", err)
 			client.Close()
@@ -143,15 +157,27 @@ func broadcastMessage(message string) {
 	}
 }
 
-// LogWriter is a custom io.Writer that captures logs and sends them to WebSocket clients
-type LogWriter struct {
-	underlying io.Writer // The original writer to also write logs to
+// SendPackageLog sends a log message associated with a specific package
+func SendPackageLog(packageName, message string, timestamp int64) {
+	logMsg := LogMessage{
+		Package: packageName,
+		Message: message,
+		Time:    timestamp,
+	}
+	broadcastMessage(logMsg)
 }
 
-// NewLogWriter creates a new LogWriter
-func NewLogWriter(underlying io.Writer) *LogWriter {
+// LogWriter is a custom io.Writer that captures logs and sends them to WebSocket clients
+type LogWriter struct {
+	underlying  io.Writer // The original writer to also write logs to
+	packageName string    // The package this writer is associated with
+}
+
+// NewLogWriter creates a new LogWriter for a specific package
+func NewLogWriter(underlying io.Writer, packageName string) *LogWriter {
 	return &LogWriter{
-		underlying: underlying,
+		underlying:  underlying,
+		packageName: packageName,
 	}
 }
 
@@ -162,8 +188,16 @@ func (w *LogWriter) Write(p []byte) (n int, err error) {
 		w.underlying.Write(p)
 	}
 
-	// Process the log line and send it to WebSocket clients
-	broadcastMessage(string(p))
+	// Get current timestamp in milliseconds
+	timestamp := helpers.GetCurrentTimeMillis()
+
+	// Create a structured log message and send it to WebSocket clients
+	logMsg := LogMessage{
+		Package: w.packageName,
+		Message: string(p),
+		Time:    timestamp,
+	}
+	broadcastMessage(logMsg)
 
 	return len(p), nil
 }
@@ -188,14 +222,24 @@ func serveHTML(w http.ResponseWriter) {
             opacity: 0;
         }
         .log-container {
-            height: calc(100vh - 120px);
+            height: calc(100vh - 200px);
             overflow-y: auto;
+        }
+        .tab {
+            @apply px-4 py-2 text-sm font-medium text-center cursor-pointer;
+            @apply border-b-2 transition-colors duration-200;
+        }
+        .tab.active {
+            @apply border-blue-500 text-blue-600;
+        }
+        .tab:not(.active) {
+            @apply border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300;
         }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
     <div id="app" class="container mx-auto px-4 py-8">
-        <header class="mb-8">
+        <header class="mb-6">
             <h1 class="text-3xl font-bold text-gray-800">Transpiler4 Build Logs</h1>
             <p class="text-gray-600">Real-time build logs from watch mode</p>
         </header>
@@ -212,31 +256,99 @@ func serveHTML(w http.ResponseWriter) {
                 </div>
             </div>
             
+            <!-- Tabs -->
+            <div class="border-b border-gray-200 mb-4">
+                <nav class="flex -mb-px overflow-x-auto">
+                    <div 
+                        v-for="tab in tabs" 
+                        :key="tab"
+                        @click="activeTab = tab"
+                        class="tab"
+                        :class="{'active': activeTab === tab}"
+                    >
+                        {{ tab }}
+                        <span v-if="getLogCountForPackage(tab) > 0" 
+                              class="ml-1 bg-blue-100 text-blue-600 text-xs font-semibold px-1.5 py-0.5 rounded-full">
+                            {{ getLogCountForPackage(tab) }}
+                        </span>
+                    </div>
+                </nav>
+            </div>
+            
+            <!-- Log Display -->
             <div class="log-container bg-gray-800 text-gray-100 rounded p-4 font-mono text-sm">
                 <transition-group name="fade">
-                    <div v-for="(log, index) in logs" :key="index" class="py-1" :class="{'border-b border-gray-700': index < logs.length - 1}">
-                        {{ log }}
+                    <div v-for="log in filteredLogs" :key="log.id" class="py-1" :class="{'border-b border-gray-700': log !== filteredLogs[filteredLogs.length - 1]}">
+                        <span class="text-gray-400 mr-2">{{ formatTime(log.time) }}</span>
+                        {{ log.message }}
                     </div>
                 </transition-group>
-                <div v-if="logs.length === 0" class="text-gray-500 italic">
-                    Waiting for build logs...
+                <div v-if="filteredLogs.length === 0" class="text-gray-500 italic">
+                    No logs available for {{ activeTab }}
                 </div>
             </div>
         </div>
         
-        <div class="text-center text-gray-500 text-sm">
-            <p>Transpiler4 Watch Mode</p>
+        <div class="text-center text-gray-500 text-sm mt-4 flex justify-between">
+            <div>
+                <span class="font-semibold">Total Messages:</span> {{ allLogs.length }}
+            </div>
+            <div>
+                <button @click="clearLogs" class="px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition">
+                    Clear All Logs
+                </button>
+            </div>
         </div>
     </div>
 
     <script>
-        const { createApp, ref, onMounted, onUnmounted } = Vue;
+        const { createApp, ref, computed, onMounted, onUnmounted, watch } = Vue;
         
         createApp({
             setup() {
-                const logs = ref([]);
+                const allLogs = ref([]);
                 const connectionStatus = ref('Connecting...');
+                const activeTab = ref('All');
+                let nextId = 0;
                 let socket = null;
+                
+                // Compute unique package tabs
+                const tabs = computed(() => {
+                    const packages = ['All'];
+                    allLogs.value.forEach(log => {
+                        if (!packages.includes(log.package)) {
+                            packages.push(log.package);
+                        }
+                    });
+                    return packages;
+                });
+                
+                // Filter logs based on active tab
+                const filteredLogs = computed(() => {
+                    if (activeTab.value === 'All') {
+                        return allLogs.value;
+                    }
+                    return allLogs.value.filter(log => log.package === activeTab.value);
+                });
+                
+                // Get log count for a specific package
+                const getLogCountForPackage = (packageName) => {
+                    if (packageName === 'All') {
+                        return allLogs.value.length;
+                    }
+                    return allLogs.value.filter(log => log.package === packageName).length;
+                };
+                
+                // Format timestamp
+                const formatTime = (timestamp) => {
+                    const date = new Date(timestamp);
+                    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                };
+                
+                // Clear all logs
+                const clearLogs = () => {
+                    allLogs.value = [];
+                };
                 
                 const connectWebSocket = () => {
                     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -250,14 +362,41 @@ func serveHTML(w http.ResponseWriter) {
                     };
                     
                     socket.onmessage = (event) => {
-                        logs.value.push(event.data);
-                        // Auto-scroll to bottom
-                        setTimeout(() => {
-                            const logContainer = document.querySelector('.log-container');
-                            if (logContainer) {
-                                logContainer.scrollTop = logContainer.scrollHeight;
+                        try {
+                            const logData = JSON.parse(event.data);
+                            
+                            // Add unique ID for Vue's key tracking
+                            const logEntry = {
+                                id: nextId++,
+                                package: logData.package || 'Unknown',
+                                message: logData.message,
+                                time: logData.time || Date.now()
+                            };
+                            
+                            allLogs.value.push(logEntry);
+                            
+                            // Auto-switch to new package tab when it first appears
+                            if (tabs.value.length === 2 && tabs.value.includes(logEntry.package) && activeTab.value === 'All') {
+                                activeTab.value = logEntry.package;
                             }
-                        }, 50);
+                            
+                            // Auto-scroll to bottom
+                            setTimeout(() => {
+                                const logContainer = document.querySelector('.log-container');
+                                if (logContainer) {
+                                    logContainer.scrollTop = logContainer.scrollHeight;
+                                }
+                            }, 50);
+                        } catch (e) {
+                            console.error('Error parsing WebSocket message:', e);
+                            // Handle legacy plain text format
+                            allLogs.value.push({
+                                id: nextId++,
+                                package: 'Unknown',
+                                message: event.data,
+                                time: Date.now()
+                            });
+                        }
                     };
                     
                     socket.onclose = () => {
@@ -283,8 +422,14 @@ func serveHTML(w http.ResponseWriter) {
                 });
                 
                 return {
-                    logs,
-                    connectionStatus
+                    allLogs,
+                    filteredLogs,
+                    tabs,
+                    activeTab,
+                    connectionStatus,
+                    getLogCountForPackage,
+                    formatTime,
+                    clearLogs
                 };
             }
         }).mount('#app');
