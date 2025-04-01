@@ -19,7 +19,6 @@ func RunCommand(ctx context.Context, command string, path string) error {
 		cmd.Dir = path
 		cmd.Stdout = log.Writer()
 		cmd.Stderr = log.Writer()
-		log.Println(cmd.String())
 
 		err := cmd.Run()
 		if err != nil {
@@ -111,14 +110,14 @@ func BuildPackage(ctx context.Context, pkg NodePackage, webappPath string) error
 	commands := GetBuildCommand(pkg, webappPath)
 	//Store start time
 	startTime := time.Now()
-	beeep.Notify("Build started", pkg.PackageJson.Name+" build started", "")
+	SendNotification("Build started", pkg.PackageJson.Name+" build started")
 	for _, command := range commands {
 		err := RunCommand(ctx, command, pkg.Path)
 		if err != nil {
 			return err
 		}
 	}
-	beeep.Notify("Build completed", pkg.PackageJson.Name+" completed in "+time.Since(startTime).String(), "")
+	SendNotification("Build completed", pkg.PackageJson.Name+" completed in "+time.Since(startTime).String())
 	return nil
 }
 
@@ -127,7 +126,7 @@ func BuildPackageWithLogger(ctx context.Context, pkg NodePackage, webappPath str
 	commands := GetBuildCommand(pkg, webappPath)
 	//Store start time
 	startTime := time.Now()
-	beeep.Notify("Build started", pkg.PackageJson.Name+" build started", "")
+	SendNotification("Build started", pkg.PackageJson.Name+" build started")
 
 	for _, command := range commands {
 		err := RunCommandWithLogger(ctx, command, pkg.Path, logger)
@@ -137,6 +136,6 @@ func BuildPackageWithLogger(ctx context.Context, pkg NodePackage, webappPath str
 	}
 
 	duration := time.Since(startTime).String()
-	beeep.Notify("Build completed", pkg.PackageJson.Name+" completed in "+duration, "")
+	SendNotification("Build completed", pkg.PackageJson.Name+" completed in "+duration)
 	return nil
 }
