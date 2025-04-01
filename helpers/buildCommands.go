@@ -3,27 +3,44 @@ package helpers
 import (
 	"context"
 	"log"
+	"os/exec"
 	"time"
 
 	"github.com/gen2brain/beeep"
 )
 
-func RunCommand(ctx context.Context, command string) error {
+func RunCommand(ctx context.Context, command string, path string) error {
 	//dry run
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		log.Println(command)
-		time.Sleep(1 * time.Second)
+		cmd := exec.Command("sh", "-c", command)
+		cmd.Dir = path
+		cmd.Stdout = log.Writer()
+		cmd.Stderr = log.Writer()
+		log.Println(cmd.String())
+
+		err := cmd.Run()
+		if err != nil {
+			beeep.Notify("Build failed", err.Error(), "")
+			return err
+		}
 		return nil
 	}
 }
 
 func GetBuildCommand(pkg NodePackage, webappPath string) []string {
-	if pkg.Strategy == "TRANSPILED" {
+	if pkg.Strategy == "TRANSPILED_YARN" {
 		return []string{
 			"yarn transpile",
+			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/dist",
+			"cp -R " + pkg.Path + "/dist " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
+		}
+	}
+	if pkg.Strategy == "TRANSPILED" {
+		return []string{
+			"pnpm transpile",
 			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/dist",
 			"cp -R " + pkg.Path + "/dist " + webappPath + "/node_modules/" + pkg.PackageJson.Name,
 		}
@@ -38,6 +55,17 @@ func GetBuildCommand(pkg NodePackage, webappPath string) []string {
 			"cp -R amend " + webappPath + "/node_modules/@mediatool/mt-utils",
 		}
 	}
+	if pkg.Strategy == "MAKEFILE_BUILD" {
+		return []string{
+			"make build",
+		}
+	}
+	if pkg.Strategy == "TRANSPILED_LEGACY" {
+		beeep.Notify("Build failed", "TRANSPILED_LEGACY is not supported yet", "")
+		return []string{
+			"echo 'TRANSPILED_LEGACY'",
+		}
+	}
 	return []string{}
 }
 
@@ -47,7 +75,7 @@ func BuildPackage(ctx context.Context, pkg NodePackage, webappPath string) error
 	startTime := time.Now()
 	beeep.Notify("Build started", pkg.PackageJson.Name+" build started", "")
 	for _, command := range commands {
-		err := RunCommand(ctx, command)
+		err := RunCommand(ctx, command, pkg.Path)
 		if err != nil {
 			return err
 		}

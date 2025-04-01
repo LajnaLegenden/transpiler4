@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/LajnaLegenden/transpiler4/helpers"
 	"github.com/urfave/cli/v2"
@@ -36,8 +37,13 @@ func ListAction(c *cli.Context) error {
 		return err
 	}
 	buildablePackages := helpers.GetBuildablePackages(projects)
+	fmt.Printf("%-40s %-20s %-10s\n", "Package Name", "Strategy", "Frontend")
+	fmt.Println(strings.Repeat("-", 70))
 	for _, pkg := range buildablePackages {
-		fmt.Println(pkg.PackageJson.Name + " (" + string(pkg.Strategy) + ")")
+		fmt.Printf("%-40s %-20s %-10v\n",
+			pkg.PackageJson.Name,
+			pkg.Strategy,
+			pkg.IsFrontend)
 	}
 	return nil
 }

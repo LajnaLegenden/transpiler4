@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -42,8 +43,11 @@ func IsMediatoolRoot(path string) bool {
 
 // PackageJson represents the structure of a package.json file
 type PackageJson struct {
-	Name    string            `json:"name"`
-	Scripts map[string]string `json:"scripts"`
+	Name             string            `json:"name"`
+	Scripts          map[string]string `json:"scripts"`
+	PackageManager   string            `json:"packageManager"`
+	Dependencies     map[string]string `json:"dependencies"`
+	PeerDependencies map[string]string `json:"peerDependencies"`
 	// Add other fields as needed
 }
 
@@ -55,6 +59,7 @@ const (
 	TRANSPILED_LEGACY LinkingStrategy = "TRANSPILED_LEGACY"
 	AMEND_NATIVE      LinkingStrategy = "AMEND_NATIVE"
 	MAKEFILE_BUILD    LinkingStrategy = "MAKEFILE_BUILD"
+	TRANSPILED_YARN   LinkingStrategy = "TRANSPILED_YARN"
 )
 
 // GetPackageJsonForPath reads and parses the package.json file at the given path
@@ -78,41 +83,64 @@ func GetPackageJsonForPath(absolutePath string, required bool) (*PackageJson, er
 }
 
 // strategyChecker is a function that checks if a strategy applies
-type strategyChecker func(folderItems map[string]bool, packageJson *PackageJson) bool
+type strategyChecker func(folderItems map[string]bool, packageJson *PackageJson, absolutePath string) bool
 
 // getStrategyCheckers returns a map of strategy checkers
 func getStrategyCheckers() map[LinkingStrategy]strategyChecker {
 	return map[LinkingStrategy]strategyChecker{
-		TRANSPILED: func(folderItems map[string]bool, _ *PackageJson) bool {
-			return folderItems["rollup.config.mjs"] || folderItems["rollup.config.js"]
+		TRANSPILED_YARN: func(folderItems map[string]bool, packageJson *PackageJson, absolutePath string) bool {
+			return (folderItems["rollup.config.mjs"] ||
+				folderItems["rollup.config.js"]) &&
+				strings.Contains(packageJson.PackageManager, "yarn") ||
+				strings.Contains(absolutePath, "domain/")
 		},
-		TRANSPILED_LEGACY: func(_ map[string]bool, packageJson *PackageJson) bool {
+		TRANSPILED: func(folderItems map[string]bool, packageJson *PackageJson, absolutePath string) bool {
+			return folderItems["rollup.config.mjs"] ||
+				folderItems["rollup.config.js"]
+		},
+		TRANSPILED_LEGACY: func(_ map[string]bool, packageJson *PackageJson, absolutePath string) bool {
 			if packageJson == nil || packageJson.Scripts == nil {
 				return false
 			}
 			_, hasBuild := packageJson.Scripts["build"]
 			return hasBuild
 		},
-		AMEND_NATIVE: func(folderItems map[string]bool, _ *PackageJson) bool {
+		AMEND_NATIVE: func(folderItems map[string]bool, _ *PackageJson, absolutePath string) bool {
 			return folderItems["amend"] && folderItems["lib"]
 		},
-		MAKEFILE_BUILD: func(folderItems map[string]bool, _ *PackageJson) bool {
+		MAKEFILE_BUILD: func(folderItems map[string]bool, _ *PackageJson, absolutePath string) bool {
 			return folderItems["Makefile"]
 		},
 	}
 }
 
 // GetOptimalStrategy determines the optimal linking strategy based on folder contents and package.json
-func GetOptimalStrategy(folderItems map[string]bool, packageJson *PackageJson) LinkingStrategy {
+func GetOptimalStrategy(folderItems map[string]bool, packageJson *PackageJson, absolutePath string) LinkingStrategy {
 	checkers := getStrategyCheckers()
+	strategies := getOrderedStrategies()
 
-	for strategy, checker := range checkers {
-		if checker(folderItems, packageJson) {
-			return strategy
+	// Iterate through strategies in a defined order
+	for _, strategy := range strategies {
+		if checker, exists := checkers[strategy]; exists {
+			if checker(folderItems, packageJson, absolutePath) {
+				return strategy
+			}
 		}
 	}
 
-	return ""
+	return "UNKNOWN"
+}
+
+// This function would define the order of strategy evaluation
+func getOrderedStrategies() []LinkingStrategy {
+	return []LinkingStrategy{
+		// List strategies in priority order
+		TRANSPILED_YARN,
+		TRANSPILED,
+		TRANSPILED_LEGACY,
+		AMEND_NATIVE,
+		MAKEFILE_BUILD,
+	}
 }
 
 // GetLinkingStrategyForPackage analyzes a package directory and determines the appropriate linking strategy
@@ -138,7 +166,7 @@ func GetLinkingStrategyForPackage(absolutePath string) (LinkingStrategy, error) 
 		folderItems[file.Name()] = true
 	}
 
-	return GetOptimalStrategy(folderItems, packageJson), nil
+	return GetOptimalStrategy(folderItems, packageJson, absolutePath), nil
 }
 
 // NodePackage represents a Node.js package with its path and package.json data
@@ -148,6 +176,7 @@ type NodePackage struct {
 	Strategy        LinkingStrategy `json:"strategy"`
 	IsMediatoolRoot bool            `json:"isMediatoolRoot"`
 	FolderItems     map[string]bool `json:"folderItems"`
+	IsFrontend      bool            `json:"isFrontend"`
 }
 
 // FindNodePackages recursively finds all Node.js packages in the given directory
@@ -183,13 +212,15 @@ func FindNodePackages(rootDir string) ([]NodePackage, error) {
 
 				if packageJson != nil {
 					folderItems := GetFolderItems(absPath)
-					strategy := GetOptimalStrategy(folderItems, packageJson)
+					strategy := GetOptimalStrategy(folderItems, packageJson, absPath)
+					isFrontend := strings.Contains(packageJson.Name, "frontend") || packageJson.Dependencies["react"] != "" || packageJson.PeerDependencies["react"] != ""
 					packages = append(packages, NodePackage{
 						Path:            absPath,
 						PackageJson:     packageJson,
 						Strategy:        strategy,
 						IsMediatoolRoot: IsMediatoolRoot(absPath),
 						FolderItems:     folderItems,
+						IsFrontend:      isFrontend,
 					})
 				}
 			}
@@ -254,16 +285,22 @@ func GetAbsolutePath(path string) (string, error) {
 
 func GetProjectPath(path string) (string, error) {
 	if path != "" {
-		return GetAbsolutePath(path)
+		if IsMediatoolRoot(path) {
+			return GetAbsolutePath(path)
+		}
 	}
-	return ".", nil
+
+	if IsMediatoolRoot(".") {
+		return ".", nil
+	}
+	return "", errors.New("not mediatool root")
 }
 
 func GetBuildablePackages(packages []NodePackage) []NodePackage {
-	//filter out root packages webapp and oackages witrrhout strategy
+	//filter out root packages webapp and oackages without strategy
 	buildablePackages := []NodePackage{}
 	for _, pkg := range packages {
-		if pkg.Strategy != "" && pkg.PackageJson.Name != "mediatool-webapp" && !pkg.IsMediatoolRoot {
+		if pkg.Strategy != "UNKNOWN" && pkg.PackageJson.Name != "mediatool-webapp" && !pkg.IsMediatoolRoot {
 			buildablePackages = append(buildablePackages, pkg)
 		}
 	}
