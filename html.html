@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transpiler4 Build Logs</title>
+    <!-- Tailwind CSS from CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue.js from CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        .fade-enter-active, .fade-leave-active {
+            transition: opacity 0.5s;
+        }
+        .fade-enter-from, .fade-leave-to {
+            opacity: 0;
+        }
+        .log-container {
+            height: calc(100vh - 200px);
+            overflow-y: auto;
+        }
+        .tab {
+            @apply px-4 py-2 text-sm font-medium text-center cursor-pointer;
+            @apply border-b-2 transition-colors duration-200;
+        }
+        .tab.active {
+            @apply border-blue-500 text-blue-600;
+        }
+        .tab:not(.active) {
+            @apply border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div id="app" class="container mx-auto px-4 py-8">
+        <header class="mb-6">
+            <h1 class="text-3xl font-bold text-gray-800">MTCLI Build Logs</h1>
+            <p class="text-gray-600">Real-time build logs from watch mode</p>
+        </header>
+        
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div class="flex justify-between items-center mb-2">
+                <h2 class="text-xl font-semibold text-gray-700">Live Build Logs</h2>
+                <div class="flex items-center">
+                    <span class="flex h-4 w-4 relative mr-2">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-4 w-4 bg-green-500"></span>
+                    </span>
+                    <span class="text-sm font-medium text-gray-600">{{ connectionStatus }}</span>
+                </div>
+            </div>
+            
+            <!-- Tabs -->
+            <div class="mb-4">
+                <nav class="flex flex-wrap gap-2">
+                    <button 
+                        v-for="tab in tabs" 
+                        :key="tab"
+                        @click="activeTab = tab"
+                        class="px-4 py-2 rounded-lg font-medium text-sm transition-colors duration-200 flex items-center"
+                        :class="activeTab === tab ? 'bg-blue-500 text-white shadow-sm' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                    >
+                        {{ tab }}
+                        <span v-if="getLogCountForPackage(tab) > 0" 
+                              class="ml-2 bg-white bg-opacity-20 text-xs font-semibold px-1.5 py-0.5 rounded-full">
+                            {{ getLogCountForPackage(tab) }}
+                        </span>
+                    </button>
+                </nav>
+            </div>
+            
+            <!-- Log Display -->
+            <div class="log-container bg-gray-800 text-gray-100 rounded p-4 font-mono text-sm">
+                <transition-group name="fade">
+                    <div v-for="log in filteredLogs" :key="log.id" class="py-1" :class="{'border-b border-gray-700': log !== filteredLogs[filteredLogs.length - 1]}">
+                        <span class="text-gray-400 mr-2">{{ formatTime(log.time) }}</span>
+                        {{ log.message }}
+                    </div>
+                </transition-group>
+                <div v-if="filteredLogs.length === 0" class="text-gray-500 italic">
+                    No logs available for {{ activeTab }}
+                </div>
+            </div>
+        </div>
+        
+        <div class="text-center text-gray-500 text-sm mt-4 flex justify-between">
+            <div>
+                <span class="font-semibold">Total Messages:</span> {{ allLogs.length }}
+            </div>
+            <div>
+                <button @click="clearLogs" class="px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 transition">
+                    Clear All Logs
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, onUnmounted, watch } = Vue;
+        
+        createApp({
+            setup() {
+                const allLogs = ref([]);
+                const connectionStatus = ref('Connecting...');
+                const activeTab = ref('All');
+                let nextId = 0;
+                let socket = null;
+                
+                // Compute unique package tabs
+                const tabs = computed(() => {
+                    const packages = ['All'];
+                    allLogs.value.forEach(log => {
+                        if (!packages.includes(log.package)) {
+                            packages.push(log.package);
+                        }
+                    });
+                    return packages;
+                });
+                
+                // Filter logs based on active tab
+                const filteredLogs = computed(() => {
+                    if (activeTab.value === 'All') {
+                        return allLogs.value;
+                    }
+                    return allLogs.value.filter(log => log.package === activeTab.value);
+                });
+                
+                // Get log count for a specific package
+                const getLogCountForPackage = (packageName) => {
+                    if (packageName === 'All') {
+                        return allLogs.value.length;
+                    }
+                    return allLogs.value.filter(log => log.package === packageName).length;
+                };
+                
+                // Format timestamp
+                const formatTime = (timestamp) => {
+                    const date = new Date(timestamp);
+                    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+                };
+                
+                // Clear all logs
+                const clearLogs = () => {
+                    allLogs.value = [];
+                };
+                
+                const connectWebSocket = () => {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = protocol + '//' + window.location.host + '/ws';
+                    
+                    socket = new WebSocket(wsUrl);
+                    
+                    socket.onopen = () => {
+                        connectionStatus.value = 'Connected';
+                        console.log('WebSocket connection established');
+                    };
+                    
+                    socket.onmessage = (event) => {
+                        try {
+                            const logData = JSON.parse(event.data);
+                            
+                            // Add unique ID for Vue's key tracking
+                            const logEntry = {
+                                id: nextId++,
+                                package: logData.package || 'Unknown',
+                                message: logData.message,
+                                time: logData.time || Date.now()
+                            };
+                            
+                            allLogs.value.push(logEntry);
+                            
+                            // Auto-switch to new package tab when it first appears
+                            if (tabs.value.length === 2 && tabs.value.includes(logEntry.package) && activeTab.value === 'All') {
+                                activeTab.value = logEntry.package;
+                            }
+                            
+                            // Auto-scroll to bottom
+                            setTimeout(() => {
+                                const logContainer = document.querySelector('.log-container');
+                                if (logContainer) {
+                                    logContainer.scrollTop = logContainer.scrollHeight;
+                                }
+                            }, 50);
+                        } catch (e) {
+                            console.error('Error parsing WebSocket message:', e);
+                            // Handle legacy plain text format
+                            allLogs.value.push({
+                                id: nextId++,
+                                package: 'Unknown',
+                                message: event.data,
+                                time: Date.now()
+                            });
+                        }
+                    };
+                    
+                    socket.onclose = () => {
+                        connectionStatus.value = 'Disconnected - Reconnecting...';
+                        console.log('WebSocket connection closed, attempting to reconnect...');
+                        setTimeout(connectWebSocket, 3000);
+                    };
+                    
+                    socket.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        connectionStatus.value = 'Connection error';
+                    };
+                };
+                
+                onMounted(() => {
+                    connectWebSocket();
+                });
+                
+                onUnmounted(() => {
+                    if (socket) {
+                        socket.close();
+                    }
+                });
+                
+                return {
+                    allLogs,
+                    filteredLogs,
+                    tabs,
+                    activeTab,
+                    connectionStatus,
+                    getLogCountForPackage,
+                    formatTime,
+                    clearLogs
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

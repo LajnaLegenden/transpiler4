@@ -37,7 +37,6 @@ func WatchCommand() *cli.Command {
 
 // WatchAction handles the watch command execution
 func WatchAction(c *cli.Context) error {
-	fmt.Println("We are watching for changes and building and copying this project")
 	projectPath, err := helpers.GetProjectPath(c.String("path"))
 	if err != nil {
 		return fmt.Errorf("failed to get project path: %w", err)
@@ -76,7 +75,6 @@ func WatchAction(c *cli.Context) error {
 
 	go func() {
 		<-signalChan
-		log.Println("\nReceived an interrupt, stopping...")
 		// Stop the log socket server before exiting
 		logsocket.StopServer()
 		close(stopChan)
@@ -108,7 +106,6 @@ func addDirsToWatcher(watcher *fsnotify.Watcher, rootPath string) error {
 		}
 		if info.IsDir() {
 			err = watcher.Add(path)
-			log.Println("Added path to watcher:", path)
 			if err != nil {
 				log.Fatal("Failed to add path to watcher: ", err)
 			}
@@ -167,10 +164,8 @@ func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, pkg helpers.N
 func handleEvent(event fsnotify.Event, buildChan chan struct{}, ctx *context.Context,
 	cancel *context.CancelFunc, pkg helpers.NodePackage, webappPath string,
 	debounceTimer **time.Timer, debounceTimeout time.Duration, logger *log.Logger) {
-	logger.Printf("Event: %s %s", event.Op.String(), event.Name)
 	if event.Op&fsnotify.Write == fsnotify.Write {
 		logger.Printf("File %s has been modified", event.Name)
-
 		// If there's an existing timer, stop it
 		if *debounceTimer != nil {
 			(*debounceTimer).Stop()
@@ -178,7 +173,6 @@ func handleEvent(event fsnotify.Event, buildChan chan struct{}, ctx *context.Con
 
 		// Create a new timer
 		*debounceTimer = time.AfterFunc(debounceTimeout, func() {
-			logger.Printf("Debounce timer expired, triggering build for %s", pkg.PackageJson.Name)
 			select {
 			case buildChan <- struct{}{}:
 			default:
