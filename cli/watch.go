@@ -30,6 +30,11 @@ func WatchCommand() *cli.Command {
 				Aliases: []string{"p"},
 				Usage:   "Path to the project folder",
 			},
+			&cli.BoolFlag{
+				Name:    "no-build",
+				Aliases: []string{"n"},
+				Usage:   "Disable initial build when starting watch",
+			},
 		},
 		Action: WatchAction,
 	}
@@ -83,7 +88,7 @@ func WatchAction(c *cli.Context) error {
 	for _, pkg := range selectedPackages {
 		log.Printf("Selected package: %s\n", pkg.PackageJson.Name)
 		wg.Add(1)
-		go watchForChanges(&wg, stopChan, pkg, projectPath+"/webapp")
+		go watchForChanges(&wg, stopChan, pkg, projectPath+"/webapp", !c.Bool("no-build"))
 	}
 
 	wg.Wait() // Wait for all goroutines to finish
@@ -114,7 +119,7 @@ func addDirsToWatcher(watcher *fsnotify.Watcher, rootPath string) error {
 	})
 }
 
-func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, pkg helpers.NodePackage, webappPath string) {
+func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, pkg helpers.NodePackage, webappPath string, initialBuild bool) {
 	defer wg.Done()
 
 	// Create a package-specific logger
@@ -141,6 +146,11 @@ func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, pkg helpers.N
 	debounceTimeout := 1000 * time.Millisecond // Configurable debounce delay
 
 	go handleBuilds(ctx, buildChan, pkg, webappPath, packageLogger)
+
+	// Trigger initial build if enabled
+	if initialBuild {
+		buildChan <- struct{}{}
+	}
 
 	for {
 		select {
