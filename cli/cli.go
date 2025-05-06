@@ -17,6 +17,7 @@ func SetupCLI() *cli.App {
 			BuildCommand(),
 			WatchCommand(),
 			ListCommand(),
+			StepsCommand(),
 		},
 	}
 

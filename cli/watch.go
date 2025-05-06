@@ -101,7 +101,7 @@ func addDirsToWatcher(watcher *fsnotify.Watcher, rootPath string) error {
 		if err != nil {
 			return err
 		}
-		unallowedDirs := []string{"node_modules", ".git", "dist", "build", "test", "tests"}
+		unallowedDirs := []string{"node_modules", ".git", "dist", "build", "test", "tests", "features"}
 		if info.IsDir() {
 			for _, dir := range unallowedDirs {
 				if filepath.Base(path) == dir {

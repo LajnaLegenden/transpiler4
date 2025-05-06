@@ -1,0 +1,206 @@
+const { find, pluck } = require('ramda')
+const { propEq } = require('yafu')
+
+const { assert } = require('chai')
+const { Before, When, Then, Given } = require('@cucumber/cucumber')
+
+Before(function () {
+  this.tags = []
+
+  this.createTag2 = async (input) => {
+    const commandCreateTag = this.di.get('commandCreateTag2')
+    const tag = await this.executeCommand(commandCreateTag, input)
+    return this.updateCollection(this.tags, tag)
+  }
+
+  this.idForTag2Name = (name) => (
+    find(propEq('name', name), this.tags)?._id ?? 'nonExisting'
+  )
+
+  this.tagCategory2ForTag2Id = (tagId) => {
+    const tag = find(propEq('_id', tagId), this.tags)
+    return find(propEq('_id', tag?.tagCategory2Id), this.tagCategories)
+  }
+})
+Given('tag category 2 {string} already has a tag called {string}', async function (tagCategoryName, tagName) {
+  const tagCategoryStorage = this.di.get('tagCategoryStorage')
+  const { tagCategories: [ tagCategory ] } = await tagCategoryStorage.search(
+    { name: tagCategoryName },
+    {}
+  )
+
+  const input = {
+    actor: 'system',
+    params: {
+      tag: {
+        tagCategory2Id: tagCategory?._id ?? 'nonExisting',
+        organizationId: tagCategory?.organizationId ?? 'nonExisting',
+        name: tagName,
+      },
+    },
+  }
+
+  return this.grabPromiseDefaults(this.createTag2(input))
+})
+
+Given('tag category 2 {string} already has a tag called {string} with parent {string}', async function (tagCategoryName, tagName, parentTagName) {
+  const tagCategoryStorage = this.di.get('tagCategoryStorage')
+  const tagStorage = this.di.get('tagStorage')
+  const { tagCategories: [ tagCategory ] } = await tagCategoryStorage.search(
+    { name: tagCategoryName },
+    {}
+  )
+  const { tags: [ parentTag ] } = await tagStorage.search(
+    { name: parentTagName },
+    {}
+  )
+
+  const input = {
+    actor: this.user._id,
+    params: {
+      tag: {
+        tagCategory2Id: tagCategory?._id ?? 'nonExisting',
+        organizationId: tagCategory?.organizationId ?? 'nonExisting',
+        parentTagId: parentTag?._id ?? 'nonExisting',
+        name: tagName,
+      },
+    },
+  }
+
+  return this.grabPromiseDefaults(this.createTag2(input))
+})
+
+When('I add a tag 2 called {string} to category {string}', async function (tagName, tagCategoryName) {
+  const tagCategoryStorage = this.di.get('tagCategoryStorage')
+  const { tagCategories: [ tagCategory ] } = await tagCategoryStorage.search(
+    { name: tagCategoryName },
+    {}
+  )
+
+  const input = {
+    actor: this.user._id,
+    params: {
+      tag: {
+        tagCategory2Id: tagCategory?._id ?? 'nonExisting',
+        organizationId: tagCategory?.organizationId ?? 'nonExisting',
+        name: tagName,
+      },
+    },
+  }
+
+  return this.grabPromiseDefaults(this.createTag2(input))
+})
+
+When('I add a tag 2 called {string} with parent {string} to category {string}', async function (tagName, parentTagName, tagCategoryName) {
+  const tagCategoryStorage = this.di.get('tagCategoryStorage')
+  const tagStorage = this.di.get('tagStorage')
+  const { tagCategories: [ tagCategory ] } = await tagCategoryStorage.search(
+    { name: tagCategoryName },
+    {}
+  )
+  const { tags: [ parentTag ] } = await tagStorage.search(
+    { name: parentTagName },
+    {}
+  )
+
+  const input = {
+    actor: this.user._id,
+    params: {
+      tag: {
+        tagCategory2Id: tagCategory?._id ?? 'nonExisting',
+        organizationId: tagCategory?.organizationId ?? 'nonExisting',
+        parentTagId: parentTag?._id ?? 'nonExisting',
+        name: tagName,
+      },
+    },
+  }
+
+  return this.grabPromiseDefaults(this.createTag2(input))
+})
+
+When('I add a tag 2 to category {string} using invalid input', async function (tagCategoryName) {
+  const tagCategoryStorage = this.di.get('tagCategoryStorage')
+  const { tagCategories: [ tagCategory ] } = await tagCategoryStorage.search(
+    { name: tagCategoryName },
+    {}
+  )
+
+  const input = {
+    actor: this.user._id,
+    params: {
+      tag: {
+        tagCategory2Id: tagCategory?._id ?? 'nonExisting',
+        organizationId: tagCategory?.organizationId ?? 'nonExisting',
+        name: null,
+      },
+    },
+  }
+
+  return this.grabPromiseDefaults(this.createTag2(input))
+})
+
+When('I add a tag 2 called {string} with owner {string} to category {string}', async function (tagName, organizationName, tagCategoryName) {
+  const tagCategoryStorage = this.di.get('tagCategoryStorage')
+  const organizationId = this.idForOrg(organizationName) || 'fake_id'
+  const { tagCategories: [ tagCategory ] } = await tagCategoryStorage.search(
+    { name: tagCategoryName },
+    {}
+  )
+
+  const input = {
+    actor: this.user._id,
+    params: {
+      tag: {
+        tagCategory2Id: tagCategory?._id ?? 'nonExisting',
+        organizationId,
+        name: tagName,
+      },
+    },
+  }
+
+  return this.grabPromiseDefaults(this.createTag2(input))
+})
+
+Then('tag 2 {string} is owned by {string}', async function (tagName, organizationName) {
+  const tagStorage = this.di.get('tagStorage')
+  const organizationId = this.idForOrg(organizationName)
+  const { tags: [ tag ] } = await tagStorage.search(
+    { name: tagName },
+    {}
+  )
+
+  assert.equal(tag.organizationId, organizationId)
+})
+
+Then('I am notified that the tag 2 does not exist', function () {
+  this.verifyError(this.errors.NonExistingEntities, { type: 'tag', unknownIds: [ 'nonExisting' ] })
+})
+
+Then('there are no roles set for tag 2 {string}', async function (tagName) {
+  const tagStorage = this.di.get('tagStorage')
+  const { tags: [ tag ] } = await tagStorage.search(
+    { name: tagName },
+    {}
+  )
+
+  const roles = await this.authorizationStorage.getAllResourceUserRoles(tag._id)
+  assert.isEmpty(roles)
+})
+
+Then('tag 2 {string} has the following ancestors', async function (tagName, dataTable) {
+  const tagStorage = this.di.get('tagStorage')
+  const { tags: [ tag ] } = await tagStorage.search(
+    { name: tagName },
+    {}
+  )
+
+  const { ancestors: tagIds } = tag
+  const { tags: ancestorsTags } = await tagStorage.search(
+    { _id: { $in: tagIds } },
+    {}
+  )
+
+  const expectedAncestorsNames = pluck('Name', dataTable.hashes())
+  const actualAncestorsNames = pluck('name', ancestorsTags)
+  assert.deepEqual(actualAncestorsNames, expectedAncestorsNames)
+})

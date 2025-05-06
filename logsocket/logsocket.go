@@ -52,7 +52,7 @@ func StartServer() (int, error) {
 	}
 
 	// Generate our port number
-	serverPort = helpers.GeneratePortNumber()
+	serverPort = 2999
 
 	// Create a new HTTP server mux
 	mux := http.NewServeMux()

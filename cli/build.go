@@ -21,6 +21,11 @@ func BuildCommand() *cli.Command {
 				Aliases: []string{"p"},
 				Usage:   "Path to the project folder",
 			},
+			&cli.BoolFlag{
+				Name:    "out",
+				Aliases: []string{"o"},
+				Usage:   "Change the output folder",
+			},
 		},
 		Action: BuildAction,
 	}
@@ -30,7 +35,20 @@ func BuildCommand() *cli.Command {
 func BuildAction(c *cli.Context) error {
 	fmt.Println("We are building and copying this project once")
 	projectPath, err := helpers.GetProjectPath(c.String("path"))
-	webappPath := projectPath + "/webapp"
+	var webappPath string
+	if c.Bool("out") {
+		packages, err := helpers.FindNodePackages(projectPath)
+		if err != nil {
+			return err
+		}
+		if len(packages) > 1 {
+			return fmt.Errorf("only one package is supported when using the -o flag")
+		}
+		webappPath = packages[0].Path
+		webappPath = c.String("path")
+	} else {
+		webappPath = projectPath + "/webapp"
+	}
 	if err != nil {
 		return err
 	}

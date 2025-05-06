@@ -1,0 +1,683 @@
+Promise = require 'bluebird'
+R = require 'ramda'
+u = require('@mediatool/mt-utils/import')
+
+module.exports = ->
+
+  @Before (cb) ->
+    @createMediaTypesFromStandardTypes = @di.get 'createMediaTypesFromStandardTypes'
+    @createDefaultMediaTypes = @di.get 'createDefaultMediaTypes'
+    @mediaTypeStorage = @di.get 'mediaTypeStorage'
+    @standardMediaTypes = @di.get 'standardMediaTypes'
+    @orgMediaTypes = {}
+    @mediaTypeById = @entityForProp(@orgMediaTypes, '_id')
+
+    nonExistingField = _id: 'nonExistingId'
+
+    @fetchMediaType = (id, actor) ->
+      query = @di.get('queryGetMediaType')
+      input =
+        actor: actor
+        params: id
+      @executeQuery(query, input)
+
+    @idForMediaType = (name) =>
+      allTypes = R.flatten R.values @orgMediaTypes
+      mt = R.find(R.propEq('name', name), allTypes)
+      mt?._id || 'nonExistingId'
+
+    @createMediaType = (actor, opts) =>
+      command = @di.get('commandCreateMediaType')
+      data = R.merge(
+        name: 'The Media Type'
+        fields: []
+        resultFields: []
+        materialPlanFields: []
+      , opts)
+      input =
+        actor: actor
+        params:
+          mediaType: data
+      @executeCommand(command, input)
+      .then (mt) =>
+        currentTypes = R.defaultTo [], @orgMediaTypes[mt.organizationId]
+        @orgMediaTypes[mt.organizationId] = R.append mt, currentTypes
+        @dataToPush = mt
+        return mt
+
+    @getMediaTypeUsers = (mediaTypeId) =>
+      @mediaTypeStorage.search({ _id: mediaTypeId })
+        .then (mediaTypes) => mediaTypes[0].users || []
+
+    @updateMediaType = (id, data, actor) =>
+      command = @di.get('commandUpdateMediaType')
+      input =
+        actor: actor
+        params:
+          mediaTypeId: id
+          mediaType: data
+      @executeCommand(command, input).then R.tap (@dataToPush) =>
+
+    @deleteMediaType = (id, actor) ->
+      command = @di.get('commandDeleteMediaType')
+      input =
+        actor: actor
+        params: id
+      @executeCommand(command, input)
+
+    @getMediaTypesForOrg = (orgId, actor, opts) ->
+      query = @di.get('queryGetMediaTypesForOrg')
+      input =
+        actor: actor
+        params: orgId
+        opts: opts || {}
+      @executeQuery(query, input)
+
+    @revokeMediaTypeRoles = (actor, data) ->
+      command = @di.get('commandRevokeMediaTypeRoles')
+      @modifyMediaTypeAccess(actor, data, command)
+
+    @grantMediaTypeRoles = (actor, data) ->
+      command = @di.get('commandGrantMediaTypeRoles')
+      @modifyMediaTypeAccess(actor, data, command)
+
+    @modifyMediaTypeAccess = (actor, data, command) ->
+      input =
+        actor: actor
+        params: data
+      @executeCommand(command, input)
+
+    @addFieldToMediaType = (mediaTypeName, fieldName, fieldType, orgName, actor, readOnlyProductionField = false) ->
+      orgId = @idForOrg orgName
+      mediaType = R.find(R.propEq('name', mediaTypeName), @orgMediaTypes[orgId])
+      @fieldToAdd = @fieldForName(fieldType, orgId, fieldName) || nonExistingField
+      if fieldType == 'standard'
+        standardFieldId = @idForStandardField(fieldName)
+        data = fields: R.append(standardFieldId, mediaType.fields)
+      else if fieldType == 'entry'
+        data =
+          fields: R.append(@fieldToAdd._id, mediaType.fields)
+          materialPlanFields: R.append(@fieldToAdd._id, mediaType.materialPlanFields)
+      else if fieldType == 'result'
+        data =
+          resultFields: R.append(@fieldToAdd._id, mediaType.resultFields)
+      else if fieldType == 'production'
+        if readOnlyProductionField
+          data =
+            productionFields: R.append({ _id: @fieldToAdd._id, readOnly: true, hidden: false }, mediaType.productionFields)
+        else
+          data =
+            productionFields: R.append({ _id: @fieldToAdd._id }, mediaType.productionFields)
+      else
+        data =
+          headerFields: R.append(@fieldToAdd._id, mediaType.headerFields)
+
+      @updateMediaType(mediaType._id, data, actor)
+      .then (updated) =>
+        index = R.findIndex(u.hasId(updated._id), @orgMediaTypes[orgId])
+        @orgMediaTypes[orgId][index] = updated
+
+    @clearUsersFromMediaType = (mediaTypeId, userIds, actor) ->
+      command = @di.get('commandClearUsersFromMediaType')
+      input =
+        actor: actor
+        params:
+          mediaTypeId: mediaTypeId
+          userIds: userIds
+      @executeCommand(command, input)
+
+    cb()
+
+  @Given /^organization "([^"]*)" already has (\d+) media types$/, (orgName, n, callback) ->
+    orgId = @idForOrg orgName
+    number = parseInt n, 10
+    Promise.all R.times (i) =>
+      data = name: "Media Type #{i}", organizationId: orgId
+      @createMediaType('system', data)
+    , number
+    .should.notify callback
+
+  @Given /^"([^"]*)" already has media type "([^"]*)"$/, (orgName, mediaTypeName, callback) ->
+    @orgId = @idForOrg orgName
+    data =
+      name: mediaTypeName
+      color: '#000AAA'
+      organizationId: @orgId
+      type: 'planning'
+    @createMediaType('system', data)
+    .should.notify callback
+
+  @When /^I create media type "([^"]*)" on "([^"]*)" with following production fields$/, (mediaTypeName, orgName, table, callback) ->
+    orgId = @idForOrg orgName
+    wantedProductionFields = R.map((item) =>
+      field = @fieldForName('production', orgId, item.name)
+      return {
+        _id: field._id
+        readOnly: item.readOnly == 'true'
+        hidden: item.hidden == 'true'
+      }
+    , table.hashes())
+    data =
+      name: mediaTypeName
+      color: '#000AAA'
+      organizationId: orgId
+      type: 'planning'
+      productionFields: wantedProductionFields
+    @grabDefaults @createMediaType(@user._id, data), callback
+
+  @Given /^"([^"]*)" already has a result media type "([^"]*)"$/, (orgName, mediaTypeName, callback) ->
+    @orgId = @idForOrg orgName
+    data =
+      name: mediaTypeName
+      color: '#000AAA'
+      organizationId: @orgId
+      type: 'result'
+    @createMediaType('system', data)
+      .should.notify callback
+
+  @Given /^"([^"]*)" already has media type "([^"]*)" with following production fields$/, (orgName, mediaTypeName, table, callback) ->
+    orgId = @idForOrg orgName
+    wantedProductionFields = R.map((item) =>
+      field = @fieldForName('production', orgId, item.name)
+      return {
+        _id: field._id
+        readOnly: item.readOnly == 'true'
+        hidden: item.hidden == 'true'
+      }
+    , table.hashes())
+    data =
+      name: mediaTypeName
+      color: '#000AAA'
+      organizationId: orgId
+      type: 'planning'
+      productionFields: wantedProductionFields
+    @grabDefaults @createMediaType(@user._id, data), callback
+
+  @When /^I add a media type for organization "([^"]*)"$/, (orgName, callback) ->
+    orgId = @idForOrg(orgName) || 'fake_id'
+    @data =
+      name: 'some media type'
+      organizationId: orgId
+      color: '#000AAA'
+    @grabDefaults @createMediaType(@user._id, @data), callback
+
+  @When /^I add a media type named "([^"]*)" for organization "([^"]*)"$/, (mediaTypeName, orgName, callback) ->
+    orgId = @idForOrg(orgName) || 'fake_id'
+    @data =
+      name: mediaTypeName
+      organizationId: orgId
+      color: '#000AAA'
+    @grabDefaults @createMediaType(@user._id, @data), callback
+
+  @When /^I add a media type using invalid input$/, (callback) ->
+    data = name: null
+    @grabDefaults @createMediaType(@user._id, data), callback
+
+  @When /^I add a media type for organization "([^"]*)" with non existing fields$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    @data =
+      organizationId: orgId
+      fields: ['nonExistingId']
+      materialPlanFields: ['nonExistingId']
+    @grabDefaults @createMediaType(@user._id, @data), callback
+
+  @Then /^"([^"]*)" has (\d+) media types$/, (orgName, n, callback) ->
+    orgId = @idForOrg orgName
+    number = parseInt n, 10
+    @getMediaTypesForOrg(orgId, @user._id).should.eventually.have.length(number)
+    .and.notify callback
+
+  @When /^I update a non existing media type$/, (callback) ->
+    @data = name: 'newName'
+    @grabDefaults @updateMediaType('nonExistingId', @data, @user._id), callback
+
+  @When /^I delete media type "([^"]*)"$/, (mediaTypeName, callback) ->
+    mediaTypeId = @idForMediaType mediaTypeName
+    @grabDefaults @deleteMediaType(mediaTypeId, @user._id), callback
+
+  @When /^I update a media type for organization "([^"]*)"$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    @toUpdate = @orgMediaTypes[orgId][0]
+    @updateData = name: 'newName'
+    @grabDefaults @updateMediaType(@toUpdate._id, @updateData, @user._id), callback
+
+  @When /^I update a media type for organization "([^"]*)" using invalid input$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    toUpdate = @orgMediaTypes[orgId][0]
+    updateData = name: null
+    @grabDefaults @updateMediaType(toUpdate._id, updateData, @user._id), callback
+
+  @When /^I change name of media type "([^"]*)" to "([^"]*)"$/, (name, newName, callback) ->
+    allMediaTypes = R.chain(R.identity, R.values(@orgMediaTypes))
+    id = R.find(R.propEq('name', name), allMediaTypes)._id
+    updateData = name: newName
+    @grabDefaults @updateMediaType(id, updateData, @user._id), callback
+
+  @Then /^I receive the updated media type$/, (callback) ->
+    @result.should.include @updateData
+    @updatedMediaType = @result
+    callback()
+
+  @Then /^I receive the updated media type with the new (\w+) field$/, (fieldType, callback) ->
+    if fieldType == 'entry'
+      @result.fields.should.include @fieldToAdd._id
+    else if fieldType == 'result'
+      @result.resultFields.should.include @fieldToAdd._id
+    else if fieldType == 'production'
+      @result.productionFields.should.deep.include '_id': @fieldToAdd._id
+    else
+      @result.headerFields.should.include @fieldToAdd._id
+    callback()
+
+  @Then /^I receive the updated media type with the new read only production field$/, (callback) ->
+    @result.productionFields.should.deep.include
+      '_id': @fieldToAdd._id
+      'readOnly': true
+      'hidden': false
+    callback()
+
+  @When /^I fetch the updated media type again$/, (callback) ->
+    @grabDefaults @fetchMediaType(@toUpdate._id, @user._id), callback
+
+  @When /^I delete a non existing media type$/, (callback) ->
+    @grabDefaults @deleteMediaType('nonExistingId', @user._id), callback
+
+  @When /^I fetch media types for organization "([^"]*)"$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    @grabDefaults @getMediaTypesForOrg(orgId, @user._id), callback
+
+  @When /^I delete a media type for organization "([^"]*)"$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    @toDelete = @orgMediaTypes[orgId][0]
+    @grabDefaults @deleteMediaType(@toDelete._id, @user._id), callback
+
+  @When /^I fetch a non existing media type$/, (callback) ->
+    @grabDefaults @fetchMediaType('nonExistingId', @user._id), callback
+
+  @When /^I fetch a media type belonging to organization "([^"]*)"$/, (orgName, callback) ->
+    orgId = @idForOrg(orgName)
+    idToFetch = @orgMediaTypes[orgId][0]._id
+    @grabDefaults @fetchMediaType(idToFetch, @user._id), callback
+
+  @Then /^I receive the media type$/, (callback) ->
+    @result.should.have.property('name', 'Media Type 0')
+    callback()
+
+  @Then /^the fetched media type contains the updated fields$/, (callback) ->
+    @result.should.have.property('name', 'newName')
+    callback()
+
+  @Then /^I am notified that the media type does not exist$/, (callback) ->
+    @verifyError @errors.NonExisting, id: 'nonExistingId', type: 'Media Type'
+    callback()
+
+  @Then /^I get (\d+) media type([s]?)$/, (n, dummy, callback) ->
+    number = parseInt(n, 10)
+    @result.should.have.length number
+    callback()
+
+  @Given /^"([^"]*)" has several media types$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    @names = ['H', 'Z', 'A', 'Q' ,'C']
+    allPromises = Promise.all R.times (i) =>
+      data =
+        name: @names[i]
+        organizationId: orgId
+      @createMediaType(@testUsers[0]._id, data)
+    , @names.length
+    .should.notify callback
+
+  @When /^I fetch a few media types in alphabetical order for organization "([^"]*)"$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    opts =
+      limit: 2
+      sortBy: 'name'
+    @grabDefaults @getMediaTypesForOrg(orgId, @user._id, opts), callback
+
+  @When /^I fetch the remaining media types in alphabetical order for organization "([^"]*)"$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    opts =
+      offset: 2
+      sortBy: 'name'
+    @grabDefaults @getMediaTypesForOrg(orgId, @user._id, opts), callback
+
+  @Then /^I get the media types in the correct order$/, (callback) ->
+    @result.should.have.length 2
+    @result[0].should.have.property('name', @names[2])
+    @result[1].should.have.property('name', @names[4])
+    callback()
+
+  @Then /^I get the remaining media types in the correct order$/, (callback) ->
+    @result.should.have.length 3
+    @result[0].should.have.property('name', @names[0])
+    @result[1].should.have.property('name', @names[3])
+    @result[2].should.have.property('name', @names[1])
+    callback()
+
+  @When /^I create default media types for organization "([^"]*)"$/, (orgName, callback) ->
+    orgId = @idForOrg(orgName) || 'fake_id'
+    @wantedTypeNames = R.pluck('name', @standardMediaTypes)
+    @createDefaultMediaTypes(@user._id, orgId, @wantedTypeNames)
+    .then((mediaType) =>
+      orgId = R.prop('organizationId', mediaType)
+      if (R.isNil(@orgMediaTypes[orgId]))
+        @orgMediaTypes[orgId] = []
+      @orgMediaTypes[orgId].push(mediaType)
+      @grabResult(mediaType)
+    )
+    .catch(@grabError)
+    .should.notify callback
+
+  @Then /^"([^"]*)" has the roles "([^"]*)" on the created default media types$/, (userName, wantedRoles, callback) ->
+    userId = @idFor(userName)
+    roles =  R.split(/,\s?/, wantedRoles)
+    Promise.map @wantedTypeNames, (name) =>
+      mediaTypeId = @idForMediaType(name)
+      if (mediaTypeId == 'nonExistingId')
+        return Promise.reject(new Error("Media type with id #{mediaTypeId} does not exist"))
+      @authorizationStorage.getUserResourceRoles(userId, mediaTypeId).should.eventually.have.members(roles)
+    .should.notify callback
+
+  @Then /^"([^"]*)" has no roles on the created default media types$/, (userName, callback) ->
+    userId = @idFor(userName)
+    Promise.map @wantedTypeNames, (name) =>
+      mediaTypeId = @idForMediaType(name)
+      if (mediaTypeId == 'nonExistingId')
+        return Promise.reject(new Error("Media type with id #{mediaTypeId} does not exist"))
+      @authorizationStorage.getUserResourceRoles(userId, mediaTypeId).should.eventually.have.members([])
+    .should.notify callback
+
+  @Then /^"([^"]*)" has explicitly been granted roles "([^"]*)" on the created default media types$/, (userName, roles, callback) ->
+    userId = @idFor userName
+    trimmedRoles = R.split(', ', roles)
+    Promise.map @wantedTypeNames, (name) =>
+      mediaTypeId = @idForMediaType(name)
+      @getMediaTypeUsers(mediaTypeId).then (mediaTypeUsers) =>
+        mediaTypeUsers.should.deep.contain { _id: userId, roles: trimmedRoles }
+    .should.notify callback
+
+  @Then /^"([^"]*)" has not explicitly been granted any roles on the created default media types/, (userName, callback) ->
+    userId = @idFor userName
+    Promise.map @wantedTypeNames, (name) =>
+      mediaTypeId = @idForMediaType(name)
+      @getMediaTypeUsers(mediaTypeId).then (mediaTypeUsers) =>
+        userIds = R.pluck('_id', mediaTypeUsers)
+        userIds.should.not.include userId
+    .should.notify callback
+
+  @Then /^I receive the created default media types$/, (callback) ->
+    @result[0].should.have.property('name', @wantedTypeNames[0])
+    @result[1].should.have.property('name', @wantedTypeNames[1])
+    callback()
+
+  @Then /^field "([^"]*)" is a field of the default media types$/, (fieldName, callback) ->
+    @fieldStorage.search({name: fieldName}, {})
+      .then (res) =>
+        R.forEach (item) =>
+          item.fields.should.contain R.head(res.fields)._id
+        , @result
+      .should.notify callback
+
+  @Then /^"([^"]*)" has the correct number of default media types$/, (orgName, callback) ->
+    orgId = @idForOrg orgName
+    @getMediaTypesForOrg(orgId, @user._id).should.eventually.have.length(@wantedTypeNames.length)
+    .and.notify callback
+
+  @Given /^"([^"]*)" already has (\d+) default media types?$/, (orgName, n, callback) ->
+    orgId = @idForOrg orgName
+    number = parseInt n, 10
+    @wantedTypeNames =  R.times ((i) -> "standard type #{i}"), number
+    @createMediaTypesFromStandardTypes(@user._id, orgId, @wantedTypeNames)
+    .then(@grabResult)
+    .catch(@grabError)
+    .should.notify callback
+
+  @Given /^media type "([^"]*)" for "([^"]*)" already has (\w+) field "([^"]*)"$/, (mediaTypeName, orgName, fieldType, fieldName, callback) ->
+    @grabDefaults @addFieldToMediaType(mediaTypeName, fieldName, fieldType, orgName, @testUsers[0]._id), callback
+
+  @When /^I add (\w+) field "([^"]*)" to media type "([^"]*)" for "([^"]*)"$/, (fieldType, fieldName, mediaTypeName, orgName, callback) ->
+    @grabDefaults @addFieldToMediaType(mediaTypeName, fieldName, fieldType, orgName, @user._id), callback
+
+  @When /I add (\w+) field "([^"]*)" to media type "([^"]*)" for "([^"]*)" as read only$/, (fieldType, fieldName, mediaTypeName, orgName, callback) ->
+    @grabDefaults @addFieldToMediaType(mediaTypeName, fieldName, fieldType, orgName, @user._id, true), callback
+
+  @Then /^media type "([^"]*)" for "([^"]*)" has (\d+) (\w+) fields$/, (mediaTypeName, orgName, number, type, callback) ->
+    mediaTypeId = @idForMediaType mediaTypeName
+    fieldPropNames =
+      entry: 'fields'
+      header: 'headerFields'
+      material: 'materialPlanFields'
+      production: 'productionFields'
+      result: 'resultFields'
+    propName = fieldPropNames[type]
+    @fetchMediaType(mediaTypeId, @user._id).then(R.prop(propName)).should.eventually.have.length(Number(number))
+      .and.notify(callback)
+
+  @Then /^I receive the media types of "([^"]*)"/, (ownerName, callback) ->
+    orgId = @idForOrg ownerName
+    ownerMediaTypes = @orgMediaTypes[orgId]
+    @result.should.deep.equal ownerMediaTypes
+    callback()
+
+  @When /^I take ownership of the media types of "([^"]*)" to "([^"]*)"$/, (fromOrgName, toOrgName, callback) ->
+    cmd = @di.get('commandTakeMediaTypeOwnership')
+    input =
+      actor: @user._id
+      params:
+        from: @idForOrg fromOrgName
+        to: @idForOrg toOrgName
+    @executeAndGrab cmd, input, callback
+
+  @When /^I take ownership of the media types of "([^"]*)" using invalid input$/, (fromOrgName, callback) ->
+    cmd = @di.get('commandTakeMediaTypeOwnership')
+    input =
+      actor: @user._id
+      params:
+        from: @idForOrg fromOrgName
+        to: null
+    @executeAndGrab cmd, input, callback
+
+  @Then /^"([^"]*)" is the media type owner for "([^"]*)"$/, (ownerName, subName, callback) ->
+    ownerId = @idForOrg ownerName
+    subId = @idForOrg subName
+    @orgStorage.getMediaTypeOwner(subId).should.eventually.equal(ownerId).and.notify(callback)
+
+  @When /^I copy media types from "([^"]*)" to "([^"]*)"$/, (from, to, callback) ->
+    command = @di.get('commandCopyAllMediaTypes')
+    @dataToPush = null
+    input =
+      actor: @user._id
+      params:
+        from: @idForOrg from
+        to: @idForOrg to
+    @executeCommand(command, input)
+    .then(@grabResult)
+    .then(() => Promise.delay(500).then(R.always(@result)))
+    .catch(@grabError)
+    .should.notify callback
+
+  @When /^I copy media types using invalid input$/, (callback) ->
+    command = @di.get('commandCopyAllMediaTypes')
+    input =
+      actor: @user._id
+      params:
+        from: null
+        to: null
+    @grabDefaults @executeCommand(command, input), callback
+
+  @Then /^the media types of "([^"]*)" are copies of the media types of "([^"]*)"$/, (targetOrgName, orgName, callback) ->
+    sourceOrgId = @idForOrg orgName
+    targetOrgId = @idForOrg targetOrgName
+
+    @fetchFieldsForOrg(targetOrgId, 'system').then (targetFields) =>
+      sourceFields = R.concat(@orgFields[sourceOrgId], @standardFields)
+      removeIds = R.omit(['organizationId', 'fields', 'headerFields', 'materialPlanFields', 'productionFields' ])
+      stripResult = R.compose(removeIds, @removeMeta)
+      R.forEach (targetMediaType) =>
+        strippedResult = stripResult(targetMediaType)
+        sourceMediaType= R.find(R.propEq('name', strippedResult.name), @orgMediaTypes[sourceOrgId])
+        strippedSourceMediaType = stripResult(sourceMediaType)
+        strippedResult.should.deep.equal strippedSourceMediaType
+        @verifyFieldsAreCopiesById(sourceFields, targetFields, sourceMediaType.fields, targetMediaType.fields)
+        @verifyFieldsAreCopiesById(sourceFields, targetFields, sourceMediaType.materialPlanFields, targetMediaType.materialPlanFields)
+      , @result
+    .should.notify callback
+
+  @Then /^"([^"]*)" owns (\d+) media types/, (orgName, number, callback) ->
+    orgId = @idForOrg(orgName)
+    @mediaTypeStorage.getForOrg(orgId, {}).then(R.length).should.eventually.equal(Number(number))
+      .and.notify(callback)
+
+  @Then /^I receive the created media type$/, (callback) ->
+    @result.should.include @data
+    @createdMediaType = @result
+    callback()
+
+  @Given /^"([^"]*)" already has these media types and vehicles$/, (orgName, table, callback) ->
+    orgId = @idForOrg orgName
+    actor = 'system'
+    Promise.all R.map (item) =>
+      { mediaTypeName, vehicleNames, type } = item
+      if type?
+        actualType = type
+      else
+        actualType = "planning"
+      @createMediaType(actor, { name: mediaTypeName, organizationId: orgId, type: actualType })
+        .then (mediaType) =>
+          Promise.all R.map (name) =>
+            data =
+              name: name
+              organizationId: orgId
+              mediaTypeId: mediaType._id
+            @createVehicle(data, actor)
+          , R.split(', ', vehicleNames)
+    , table.hashes()
+    .should.notify callback
+
+  @Given /^mediatype "([^"]*)" for "([^"]*)" already has the following fields$/, (mediaTypeName, orgName, table, callback) ->
+    orgId = @idForOrg orgName
+    wantedFieldsNames = table.hashes()
+    fieldsToAdd = R.map((item) =>
+      field = @fieldForName('entry', orgId, item.name)
+      field._id
+    , wantedFieldsNames)
+    mediaType = R.find(R.propEq('name', mediaTypeName), @orgMediaTypes[orgId])
+    newMediaTypeFields = R.concat(fieldsToAdd, mediaType.fields)
+    updateData = fields: newMediaTypeFields
+    @grabDefaults @updateMediaType(mediaType._id, updateData, 'system'), callback
+
+  @Then /^"([^"]*)" has the following roles on these media types$/, (userName, table, callback) ->
+    hashes = table.hashes()
+    userId = @idFor(userName)
+    Promise.map hashes, (row) =>
+      roles = if row.roles == '' then [] else R.split(/,\s?/, row.roles)
+      mediaTypeId = @idForMediaType(row.name)
+      if (mediaTypeId == 'nonExistingId')
+        return Promise.reject(new Error("Media type with id #{mediaTypeId} does not exist"))
+      @authorizationStorage.getUserResourceRoles(userId, mediaTypeId).should.eventually.have.members(roles)
+    .should.notify callback
+
+  @When /^I grant access to media type "([^"]*)" for "([^"]*)" as "([^"]*)"$/, (mediaTypeName, userName, roles, callback) ->
+    mediaTypeId = @idForMediaType mediaTypeName
+    userId = @idFor userName
+    trimmedRoles = R.split(', ', roles)
+
+    data =
+      mediaTypeId: mediaTypeId
+      userId: userId
+      roles: trimmedRoles
+
+    @grabDefaults @grantMediaTypeRoles(@user._id, data), callback
+
+  @When /^I revoke access to media type "([^"]*)" using invalid input$/, (mediaTypeName, callback) ->
+    mediaTypeId = @idForMediaType mediaTypeName
+    data =
+      mediaTypeId: mediaTypeId
+      userId: null
+      roles: null
+    @grabDefaults @revokeMediaTypeRoles(@user._id, data), callback
+
+  @When /^I revoke access to roles "([^"]*)" on media type "([^"]*)" for "([^"]*)"$/, (roles, mediaTypeName, userName, callback) ->
+    mediaTypeId = @idForMediaType(mediaTypeName) || 'nonExistingId'
+    userId = @idFor userName
+    trimmedRoles = R.split(', ', roles)
+
+    data =
+      mediaTypeId: mediaTypeId
+      userId: userId
+      roles: trimmedRoles
+
+    @grabDefaults @revokeMediaTypeRoles(@user._id, data), callback
+
+  @When /^I grant access to media type "([^"]*)" using invalid input$/, (mediaTypeName, callback) ->
+    mediaTypeId = @idForMediaType(mediaTypeName) || 'nonExistingId'
+    data =
+      mediaTypeId: mediaTypeId
+      userId: null
+      roles: null
+    @grabDefaults @grantMediaTypeRoles(@user._id, data), callback
+
+  @Then /^"([^"]*)" has explicitly been granted roles "([^"]*)" on media type "([^"]*)"$/, (userName, roles, mediaTypeName, callback) ->
+    mediaTypeId = @idForMediaType mediaTypeName
+    userId = @idFor userName
+    trimmedRoles = R.split(', ', roles)
+
+    @getMediaTypeUsers(mediaTypeId).then (mediaTypeUsers) =>
+      mediaTypeUsers.should.deep.contain { _id: userId, roles: trimmedRoles }
+
+    .should.notify callback
+
+  @Then /^user "([^"]*)" has not explicitly been granted any roles on media type "([^"]*)"/, (userName, mediaTypeName, callback) ->
+    mediaTypeId = @idForMediaType mediaTypeName
+    userId = @idFor userName
+
+    @getMediaTypeUsers(mediaTypeId).then (mediaTypeUsers) =>
+      userIds = R.pluck('_id', mediaTypeUsers)
+      userIds.should.not.include userId
+
+    .should.notify callback
+
+  @Given /^user "([^"]*)" already has access to media type "([^"]*)" as "([^"]*)"/, (userName, mediaTypeName, roles, callback) ->
+    mediaTypeId = @idForMediaType mediaTypeName
+    userId = @idFor userName
+    trimmedRoles = R.split(', ', roles)
+
+    data =
+      mediaTypeId: mediaTypeId
+      userId: userId
+      roles: trimmedRoles
+
+    @grabDefaults @grantMediaTypeRoles('system', data), callback
+
+  @Then /^I am notified that the organization does not use protected media types$/, (callback) ->
+    @verifyError @errors.DataIntegrityCheckFailed
+    callback()
+
+  @Given /^mediatype "([^"]*)" for "([^"]*)" already has the following "([^"]*)" fields$/, (mediaTypeName, orgName, fieldGroup, table, callback) ->
+    orgId = @idForOrg orgName
+    wantedFieldsNames = table.hashes()
+    fieldsToAdd = R.map((item) =>
+      field = @fieldForName('entry', orgId, item.name)
+      field._id
+    , wantedFieldsNames)
+    mediaType = R.find(R.propEq('name', mediaTypeName), @orgMediaTypes[orgId])
+    mediaTypeFns = @di.get('mediaTypeFunctions')
+    prop = mediaTypeFns.fieldGroupToKey(fieldGroup)
+    newMediaTypeFields = R.concat(fieldsToAdd, mediaType[prop])
+    updateData = R.assoc(prop, newMediaTypeFields, {})
+    @grabDefaults @updateMediaType(mediaType._id, updateData, 'system'), callback
+
+  @Then /^organization "([^"]*)" has (\d+) media types/, (orgName, count, callback) ->
+    orgId = @idForOrg orgName
+    @mediaTypeStorage.search2({ organizationId: orgId }, {}).then ({ mediaTypes }) =>
+      mediaTypes.length.should.equal count
+    .should.notify callback
+  
+  @When /^I clear the users from the media type "([^"]*)" using invalid input$/, (mediaTypeName, callback) ->
+    mediaTypeId = @idForMediaType(mediaTypeName) || 'nonExistingId'
+    @grabDefaults @clearUsersFromMediaType(mediaTypeId, null, 'system'), callback
+  
+  @When /^I clear the following users from the media type "([^"]*)"$/, (mediaTypeName, table, callback) ->
+    mediaTypeId = @idForMediaType(mediaTypeName) || 'nonExistingId'
+    userIds = R.map(@idFor, R.pluck('name', table.hashes()))
+    @grabDefaults @clearUsersFromMediaType(mediaTypeId, userIds, 'system'), callback
