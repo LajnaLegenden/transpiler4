@@ -61,7 +61,7 @@ var (
 	tsDecoratorStringPattern = regexp.MustCompile(`(?m)@(Given|When|Then|And)\s*\(\s*['"\x60](.*?)['"\x60]\s*\)`)
 	tsDecoratorRegexPattern  = regexp.MustCompile(`(?m)@(Given|When|Then|And)\s*\(\s*/(.*?)/[gim]*\s*\)`)
 	// CoffeeScript patterns
-	coffeeStringPattern = regexp.MustCompile(`(?m)(Given|When|Then|And)\s*\(\s*['"\x60](.*?)['"\x60]`)
+	coffeeStringPattern = regexp.MustCompile(`(?m)(Given|When|Then|And)\s*['"/\x60](.*?)[/\x60]`)
 	coffeeRegexPattern  = regexp.MustCompile(`(?m)(Given|When|Then|And)\s*\(\s*/(.*?)/[gim]*\s*[,)]`)
 )
 
