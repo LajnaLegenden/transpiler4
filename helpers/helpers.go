@@ -92,8 +92,7 @@ func getStrategyCheckers() map[LinkingStrategy]strategyChecker {
 		TRANSPILED_YARN: func(folderItems map[string]bool, packageJson *PackageJson, absolutePath string) bool {
 			return (folderItems["rollup.config.mjs"] ||
 				folderItems["rollup.config.js"]) &&
-				strings.Contains(packageJson.PackageManager, "yarn") ||
-				strings.Contains(absolutePath, "domain/")
+				strings.Contains(packageJson.PackageManager, "yarn")
 		},
 		TRANSPILED: func(folderItems map[string]bool, packageJson *PackageJson, absolutePath string) bool {
 			return folderItems["rollup.config.mjs"] ||
