@@ -2,6 +2,7 @@ package helpers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os/exec"
 	"time"
@@ -44,6 +45,7 @@ func RunCommandWithLogger(ctx context.Context, command string, path string, logg
 		cmd.Stderr = logger.Writer()
 
 		err := cmd.Run()
+		fmt.Printf("CMD: %s\n", cmd)
 		if err != nil {
 			if err.Error() != "context: canceled" {
 				beeep.Notify("Running command failed", err.Error(), "")
@@ -89,6 +91,30 @@ func GetBuildCommand(pkg NodePackage, webappPath string) []string {
 			commands = append(commands, "cp -R amend "+webappPath+"/node_modules/"+pkg.PackageJson.Name)
 		}
 
+		return commands
+	}
+	if pkg.Strategy == "MT_INTEGRATIONS" {
+		commands := []string{}
+		commands = append(commands,
+			"pnpm prepublishOnly",
+			"rm -rf " + webappPath + "/node_modules/" + pkg.PackageJson.Name + "/dist",
+			"cp -R " + pkg.Path + "/dist " + webappPath + "/node_modules/" + pkg.PackageJson.Name)
+		// Remove old folders first
+		commands = append(commands,
+			"rm -rf "+webappPath+"/node_modules/"+pkg.PackageJson.Name+"/lib",
+			"rm -rf "+webappPath+"/node_modules/"+pkg.PackageJson.Name+"/web",
+			"rm -rf "+webappPath+"/node_modules/"+pkg.PackageJson.Name+"/amend")
+
+		// Only copy folders if they exist
+		if pkg.FolderItems["lib"] {
+			commands = append(commands, "cp -R lib "+webappPath+"/node_modules/"+pkg.PackageJson.Name)
+		}
+		if pkg.FolderItems["web"] {
+			commands = append(commands, "cp -R web "+webappPath+"/node_modules/"+pkg.PackageJson.Name)
+		}
+		if pkg.FolderItems["amend"] {
+			commands = append(commands, "cp -R amend "+webappPath+"/node_modules/"+pkg.PackageJson.Name)
+		}
 		return commands
 	}
 	if pkg.Strategy == "MAKEFILE_BUILD" {

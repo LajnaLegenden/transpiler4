@@ -61,6 +61,7 @@ const (
 	AMEND_NATIVE      LinkingStrategy = "AMEND_NATIVE"
 	MAKEFILE_BUILD    LinkingStrategy = "MAKEFILE_BUILD"
 	TRANSPILED_YARN   LinkingStrategy = "TRANSPILED_YARN"
+	MT_INTEGRATIONS   LinkingStrategy = "MT_INTEGRATIONS"
 )
 
 // GetPackageJsonForPath reads and parses the package.json file at the given path
@@ -97,6 +98,13 @@ func getStrategyCheckers() map[LinkingStrategy]strategyChecker {
 		TRANSPILED: func(folderItems map[string]bool, packageJson *PackageJson, absolutePath string) bool {
 			return folderItems["rollup.config.mjs"] ||
 				folderItems["rollup.config.js"]
+		},
+		MT_INTEGRATIONS: func(folderItems map[string]bool, packageJson *PackageJson, absolutePath string) bool {
+			if packageJson == nil || packageJson.Scripts == nil {
+				return false
+			}
+			_, hasBuild := packageJson.Scripts["build"]
+			return folderItems["amend"] && folderItems["lib"] && hasBuild
 		},
 		TRANSPILED_LEGACY: func(_ map[string]bool, packageJson *PackageJson, absolutePath string) bool {
 			if packageJson == nil || packageJson.Scripts == nil {
@@ -137,6 +145,7 @@ func getOrderedStrategies() []LinkingStrategy {
 		// List strategies in priority order
 		TRANSPILED_YARN,
 		TRANSPILED,
+		MT_INTEGRATIONS,
 		TRANSPILED_LEGACY,
 		AMEND_NATIVE,
 		MAKEFILE_BUILD,

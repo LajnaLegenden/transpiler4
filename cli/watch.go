@@ -16,6 +16,7 @@ import (
 
 	"github.com/LajnaLegenden/transpiler4/helpers"
 	"github.com/LajnaLegenden/transpiler4/logsocket"
+	"slices"
 )
 
 // WatchCommand returns the CLI command for the watch operation
@@ -103,11 +104,9 @@ func addDirsToWatcher(watcher *fsnotify.Watcher, rootPath string) error {
 		}
 		unallowedDirs := []string{"node_modules", ".git", "dist", "build", "test", "tests", "features"}
 		if info.IsDir() {
-			for _, dir := range unallowedDirs {
-				if filepath.Base(path) == dir {
+			if slices.Contains(unallowedDirs, filepath.Base(path)) {
 					return filepath.SkipDir
 				}
-			}
 		}
 		if info.IsDir() {
 			err = watcher.Add(path)
