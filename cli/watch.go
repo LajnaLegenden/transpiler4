@@ -14,9 +14,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/urfave/cli/v2"
 
+	"slices"
+
 	"github.com/LajnaLegenden/transpiler4/helpers"
 	"github.com/LajnaLegenden/transpiler4/logsocket"
-	"slices"
 )
 
 // WatchCommand returns the CLI command for the watch operation
@@ -65,15 +66,10 @@ func WatchAction(c *cli.Context) error {
 	globalLogWriter := logsocket.NewLogWriter(originalLogger, "System")
 	log.SetOutput(globalLogWriter)
 
-	packages, err := helpers.FindNodePackages(projectPath)
-	if err != nil {
-		log.Fatal("Error selecting packages: ", err)
-	}
-	buildablePackages := helpers.GetBuildablePackages(packages)
-	selectedPackages := helpers.SelectPackages(buildablePackages)
-
-	var wg sync.WaitGroup
+	// Channel to signal stopping all watchers
 	stopChan := make(chan struct{})
+	// Channel to signal reselecting packages
+	reselectChan := make(chan struct{})
 
 	// Set up signal handling
 	signalChan := make(chan os.Signal, 1)
@@ -86,14 +82,87 @@ func WatchAction(c *cli.Context) error {
 		close(stopChan)
 	}()
 
-	for _, pkg := range selectedPackages {
-		log.Printf("Selected package: %s\n", pkg.PackageJson.Name)
-		wg.Add(1)
-		go watchForChanges(&wg, stopChan, pkg, projectPath+"/webapp", !c.Bool("no-build"))
+	return runWatchLoop(c, projectPath, stopChan, reselectChan)
+}
+
+// startStdinListener starts a goroutine that listens for 'r' key and sends to reselectChan. Returns a stop channel to terminate the goroutine.
+func startStdinListener(reselectChan chan<- struct{}) chan struct{} {
+	stopStdin := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopStdin:
+				return
+			default:
+				var b [1]byte
+				os.Stdin.Read(b[:])
+				if b[0] == 'r' || b[0] == 'R' {
+					fmt.Println("\nReopening package selection menu...")
+					reselectChan <- struct{}{}
+				}
+			}
+		}
+	}()
+	return stopStdin
+}
+
+// runWatchLoop manages the watcher lifecycle and package selection
+func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, reselectChan chan struct{}) error {
+	buildablePackages, err := helpers.FindNodePackages(projectPath)
+	if err != nil {
+		log.Fatal("Error selecting packages: ", err)
+	}
+	buildablePackages = helpers.GetBuildablePackages(buildablePackages)
+
+	var (
+		selectedPackages []helpers.NodePackage
+		watcherStopChans []chan struct{}
+		wg               sync.WaitGroup
+	)
+
+	startWatchers := func() {
+		for i, pkg := range selectedPackages {
+			log.Printf("Selected package: %s\n", pkg.PackageJson.Name)
+			watcherStopChans[i] = make(chan struct{})
+			wg.Add(1)
+			go watchForChanges(&wg, watcherStopChans[i], pkg, projectPath+"/webapp", !c.Bool("no-build"))
+		}
 	}
 
-	wg.Wait() // Wait for all goroutines to finish
-	return nil
+	stopWatchers := func() {
+		for _, ch := range watcherStopChans {
+			close(ch)
+		}
+		wg.Wait()
+	}
+
+	// Initial menu selection (no stdin goroutine running yet)
+	selectedPackages = helpers.SelectPackages(buildablePackages)
+	watcherStopChans = make([]chan struct{}, len(selectedPackages))
+	stopStdin := startStdinListener(reselectChan)
+	startWatchers()
+
+	for {
+		select {
+		case <-stopChan:
+			close(stopStdin)
+			stopWatchers()
+			return nil
+		case <-reselectChan:
+			close(stopStdin)
+			stopWatchers()
+			// Reselect packages and restart watchers
+			buildablePackages, err = helpers.FindNodePackages(projectPath)
+			if err != nil {
+				log.Fatal("Error selecting packages: ", err)
+			}
+			buildablePackages = helpers.GetBuildablePackages(buildablePackages)
+			selectedPackages = helpers.SelectPackages(buildablePackages)
+			watcherStopChans = make([]chan struct{}, len(selectedPackages))
+			stopStdin = startStdinListener(reselectChan)
+			startWatchers()
+		}
+	}
 }
 
 // addDirsToWatcher recursively adds directories to the watcher, skipping node_modules
@@ -105,8 +174,8 @@ func addDirsToWatcher(watcher *fsnotify.Watcher, rootPath string) error {
 		unallowedDirs := []string{"node_modules", ".git", "dist", "build", "test", "tests", "features"}
 		if info.IsDir() {
 			if slices.Contains(unallowedDirs, filepath.Base(path)) {
-					return filepath.SkipDir
-				}
+				return filepath.SkipDir
+			}
 		}
 		if info.IsDir() {
 			err = watcher.Add(path)
