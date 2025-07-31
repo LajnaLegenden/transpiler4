@@ -1,4 +1,4 @@
-# Transpiler4 - Mediatool CLI
+# Transpiler4 - Mediatool CLI tool
 
 A powerful command line interface for managing, building, and watching Mediatool packages in a monorepo environment. This tool streamlines the development workflow by automatically detecting changes in packages, building them, and copying the results to the appropriate locations.
 
