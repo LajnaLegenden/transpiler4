@@ -13,6 +13,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/term"
 
 	"slices"
 
@@ -91,13 +92,42 @@ func WatchAction(c *cli.Context) error {
 func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}) chan struct{} {
 	stopStdin := make(chan struct{})
 	go func() {
+		// Save the current terminal state
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			// If we can't set raw mode (e.g., not a TTY), fall back to line-buffered mode
+			log.Printf("Warning: Could not set terminal to raw mode: %v", err)
+			for {
+				select {
+				case <-stopStdin:
+					return
+				default:
+					var b [1]byte
+					os.Stdin.Read(b[:])
+					if b[0] == 'r' || b[0] == 'R' {
+						fmt.Println("\nReopening package selection menu...")
+						reselectChan <- struct{}{}
+					} else if b[0] == 'a' || b[0] == 'A' {
+						fmt.Println("\nOpening menu to append packages...")
+						appendChan <- struct{}{}
+					}
+				}
+			}
+		}
+		
+		// Restore terminal state when done
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+		
 		for {
 			select {
 			case <-stopStdin:
 				return
 			default:
 				var b [1]byte
-				os.Stdin.Read(b[:])
+				n, err := os.Stdin.Read(b[:])
+				if err != nil || n == 0 {
+					continue
+				}
 				if b[0] == 'r' || b[0] == 'R' {
 					fmt.Println("\nReopening package selection menu...")
 					reselectChan <- struct{}{}
