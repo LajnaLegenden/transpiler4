@@ -284,6 +284,54 @@ func SelectPackages(packages []NodePackage) []NodePackage {
 	return selected
 }
 
+// SelectAdditionalPackages allows selecting packages while excluding already selected ones
+func SelectAdditionalPackages(packages []NodePackage, alreadySelected []NodePackage) []NodePackage {
+	// Create a map of already selected package names for quick lookup
+	selectedNames := make(map[string]bool)
+	for _, pkg := range alreadySelected {
+		selectedNames[pkg.PackageJson.Name] = true
+	}
+
+	// Filter out already selected packages
+	availablePackages := []NodePackage{}
+	for _, pkg := range packages {
+		if !selectedNames[pkg.PackageJson.Name] {
+			availablePackages = append(availablePackages, pkg)
+		}
+	}
+
+	// If no packages available, return empty slice
+	if len(availablePackages) == 0 {
+		log.Println("No additional packages available to select")
+		return []NodePackage{}
+	}
+
+	idx, err := fuzzyfinder.FindMulti(
+		availablePackages,
+		func(i int) string {
+			return availablePackages[i].PackageJson.Name
+		},
+		fuzzyfinder.WithPreviewWindow(func(i, w, h int) string {
+			if i == -1 {
+				return ""
+			}
+			return fmt.Sprintf("%s: %s",
+				availablePackages[i].PackageJson.Name,
+				availablePackages[i].Strategy)
+		}))
+	if err != nil {
+		// User cancelled selection
+		return []NodePackage{}
+	}
+
+	// Create a new slice to hold the selected packages
+	selected := make([]NodePackage, len(idx))
+	for i, index := range idx {
+		selected[i] = availablePackages[index]
+	}
+	return selected
+}
+
 func GetAbsolutePath(path string) (string, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {

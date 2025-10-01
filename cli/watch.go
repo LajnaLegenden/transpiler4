@@ -70,6 +70,8 @@ func WatchAction(c *cli.Context) error {
 	stopChan := make(chan struct{})
 	// Channel to signal reselecting packages
 	reselectChan := make(chan struct{})
+	// Channel to signal appending packages
+	appendChan := make(chan struct{})
 
 	// Set up signal handling
 	signalChan := make(chan os.Signal, 1)
@@ -82,11 +84,11 @@ func WatchAction(c *cli.Context) error {
 		close(stopChan)
 	}()
 
-	return runWatchLoop(c, projectPath, stopChan, reselectChan)
+	return runWatchLoop(c, projectPath, stopChan, reselectChan, appendChan)
 }
 
-// startStdinListener starts a goroutine that listens for 'r' key and sends to reselectChan. Returns a stop channel to terminate the goroutine.
-func startStdinListener(reselectChan chan<- struct{}) chan struct{} {
+// startStdinListener starts a goroutine that listens for 'r' key (reselect) and 'a' key (append). Returns a stop channel to terminate the goroutine.
+func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}) chan struct{} {
 	stopStdin := make(chan struct{})
 	go func() {
 		for {
@@ -99,6 +101,9 @@ func startStdinListener(reselectChan chan<- struct{}) chan struct{} {
 				if b[0] == 'r' || b[0] == 'R' {
 					fmt.Println("\nReopening package selection menu...")
 					reselectChan <- struct{}{}
+				} else if b[0] == 'a' || b[0] == 'A' {
+					fmt.Println("\nOpening menu to append packages...")
+					appendChan <- struct{}{}
 				}
 			}
 		}
@@ -107,7 +112,7 @@ func startStdinListener(reselectChan chan<- struct{}) chan struct{} {
 }
 
 // runWatchLoop manages the watcher lifecycle and package selection
-func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, reselectChan chan struct{}) error {
+func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, reselectChan chan struct{}, appendChan chan struct{}) error {
 	buildablePackages, err := helpers.FindNodePackages(projectPath)
 	if err != nil {
 		log.Fatal("Error selecting packages: ", err)
@@ -129,6 +134,17 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 		}
 	}
 
+	// startAdditionalWatchers starts watchers for newly appended packages
+	startAdditionalWatchers := func(startIdx int) {
+		for i := startIdx; i < len(selectedPackages); i++ {
+			pkg := selectedPackages[i]
+			log.Printf("Appended package: %s\n", pkg.PackageJson.Name)
+			watcherStopChans[i] = make(chan struct{})
+			wg.Add(1)
+			go watchForChanges(&wg, watcherStopChans[i], pkg, projectPath+"/webapp", !c.Bool("no-build"))
+		}
+	}
+
 	stopWatchers := func() {
 		for _, ch := range watcherStopChans {
 			close(ch)
@@ -139,8 +155,10 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 	// Initial menu selection (no stdin goroutine running yet)
 	selectedPackages = helpers.SelectPackages(buildablePackages)
 	watcherStopChans = make([]chan struct{}, len(selectedPackages))
-	stopStdin := startStdinListener(reselectChan)
+	stopStdin := startStdinListener(reselectChan, appendChan)
 	startWatchers()
+	
+	log.Println("Watching for changes. Press 'r' to reselect packages or 'a' to append additional packages.")
 
 	for {
 		select {
@@ -159,8 +177,39 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 			buildablePackages = helpers.GetBuildablePackages(buildablePackages)
 			selectedPackages = helpers.SelectPackages(buildablePackages)
 			watcherStopChans = make([]chan struct{}, len(selectedPackages))
-			stopStdin = startStdinListener(reselectChan)
+			stopStdin = startStdinListener(reselectChan, appendChan)
 			startWatchers()
+			log.Println("Watching for changes. Press 'r' to reselect packages or 'a' to append additional packages.")
+		case <-appendChan:
+			// Append additional packages without stopping existing watchers
+			buildablePackages, err = helpers.FindNodePackages(projectPath)
+			if err != nil {
+				log.Printf("Error finding packages: %v", err)
+				continue
+			}
+			buildablePackages = helpers.GetBuildablePackages(buildablePackages)
+			
+			// Select additional packages (excluding already selected ones)
+			additionalPackages := helpers.SelectAdditionalPackages(buildablePackages, selectedPackages)
+			
+			if len(additionalPackages) > 0 {
+				// Remember the current size to know where to start new watchers
+				previousSize := len(selectedPackages)
+				
+				// Append to selected packages
+				selectedPackages = append(selectedPackages, additionalPackages...)
+				
+				// Extend watcherStopChans slice
+				newStopChans := make([]chan struct{}, len(additionalPackages))
+				watcherStopChans = append(watcherStopChans, newStopChans...)
+				
+				// Start watchers only for the new packages
+				startAdditionalWatchers(previousSize)
+				
+				log.Printf("Successfully appended %d package(s)", len(additionalPackages))
+			} else {
+				log.Println("No additional packages selected")
+			}
 		}
 	}
 }
