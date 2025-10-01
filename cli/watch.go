@@ -92,8 +92,9 @@ func WatchAction(c *cli.Context) error {
 func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}) chan struct{} {
 	stopStdin := make(chan struct{})
 	go func() {
-		// Save the current terminal state
-		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		// Try to set terminal to raw mode for single character input
+		fd := int(os.Stdin.Fd())
+		oldState, err := term.MakeRaw(fd)
 		if err != nil {
 			// If we can't set raw mode (e.g., not a TTY), fall back to line-buffered mode
 			log.Printf("Warning: Could not set terminal to raw mode: %v", err)
@@ -115,8 +116,8 @@ func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}
 			}
 		}
 		
-		// Restore terminal state when done
-		defer term.Restore(int(os.Stdin.Fd()), oldState)
+		// Ensure terminal state is restored when this goroutine exits
+		defer term.Restore(fd, oldState)
 		
 		for {
 			select {
@@ -128,12 +129,32 @@ func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}
 				if err != nil || n == 0 {
 					continue
 				}
+				
+				// Check for Ctrl+C (0x03) in raw mode
+				if b[0] == 3 {
+					// Restore terminal and send interrupt signal
+					term.Restore(fd, oldState)
+					syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+					return
+				}
+				
 				if b[0] == 'r' || b[0] == 'R' {
+					// Restore terminal before triggering the menu
+					term.Restore(fd, oldState)
 					fmt.Println("\nReopening package selection menu...")
 					reselectChan <- struct{}{}
+					return // Exit this goroutine - it will be restarted after reselection
 				} else if b[0] == 'a' || b[0] == 'A' {
+					// Restore terminal before triggering the menu
+					term.Restore(fd, oldState)
 					fmt.Println("\nOpening menu to append packages...")
 					appendChan <- struct{}{}
+					// Re-enable raw mode after append (don't exit the goroutine)
+					oldState, err = term.MakeRaw(fd)
+					if err != nil {
+						log.Printf("Warning: Could not re-enable raw mode: %v", err)
+						return
+					}
 				}
 			}
 		}
