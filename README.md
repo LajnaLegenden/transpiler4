@@ -64,6 +64,16 @@ mtcli watch --path <project_path>
 
 Options:
 - `--path, -p`: Path to the project folder (optional, defaults to current directory)
+- `--no-build, -n`: Disable initial build when starting watch
+
+#### Interactive Controls
+
+While the watch command is running, you can use the following keyboard shortcuts:
+
+- **Press 'r'**: Reselect packages - Stops all watchers and opens the package selection menu to choose packages from scratch
+- **Press 'a'**: Append packages - Opens the package selection menu to add additional packages to watch without stopping existing watchers
+
+The append functionality is particularly useful when you want to add more packages to watch without disrupting ongoing build processes.
 
 ### Build Command
 

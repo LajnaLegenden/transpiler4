@@ -54,6 +54,35 @@ mtcli watch --path /path/to/your/project
 mtcli w -p /path/to/your/project
 ```
 
+### Interactive Controls
+
+While the watch command is running, you can interact with it using keyboard shortcuts:
+
+#### Reselect Packages (Press 'r' or 'R')
+
+- Stops all active watchers
+- Opens the package selection menu showing all available packages
+- Allows you to select packages from scratch
+- Restarts watchers for the newly selected packages
+
+This is useful when you want to completely change which packages you're watching.
+
+#### Append Packages (Press 'a' or 'A')
+
+- Keeps all existing watchers running
+- Opens the package selection menu showing only unselected packages
+- Allows you to add additional packages to the watch list
+- Starts watchers only for the newly added packages
+
+This is particularly useful when you want to add more packages without disrupting ongoing build processes.
+
+**Example workflow:**
+1. Start by watching `package-a` and `package-b`
+2. Press 'a' to append packages
+3. Select `package-c` from the filtered list
+4. `package-a` and `package-b` continue watching uninterrupted
+5. `package-c` watcher starts immediately
+
 ### Examples
 
 #### Watch a monorepo from within the project
