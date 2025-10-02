@@ -73,6 +73,8 @@ func WatchAction(c *cli.Context) error {
 	reselectChan := make(chan struct{})
 	// Channel to signal appending packages
 	appendChan := make(chan struct{})
+	// Channel to signal rebuilding all packages
+	rebuildChan := make(chan struct{})
 
 	// Set up signal handling
 	signalChan := make(chan os.Signal, 1)
@@ -85,11 +87,11 @@ func WatchAction(c *cli.Context) error {
 		close(stopChan)
 	}()
 
-	return runWatchLoop(c, projectPath, stopChan, reselectChan, appendChan)
+	return runWatchLoop(c, projectPath, stopChan, reselectChan, appendChan, rebuildChan)
 }
 
-// startStdinListener starts a goroutine that listens for 'r' key (reselect) and 'a' key (append). Returns a stop channel to terminate the goroutine.
-func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}) chan struct{} {
+// startStdinListener starts a goroutine that listens for 'r' key (reselect), 'a' key (append), and 'b' key (rebuild all). Returns a stop channel to terminate the goroutine.
+func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}, rebuildChan chan<- struct{}) chan struct{} {
 	stopStdin := make(chan struct{})
 	go func() {
 		// Try to set terminal to raw mode for single character input
@@ -111,6 +113,9 @@ func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}
 					} else if b[0] == 'a' || b[0] == 'A' {
 						fmt.Println("\nOpening menu to append packages...")
 						appendChan <- struct{}{}
+					} else if b[0] == 'b' || b[0] == 'B' {
+						fmt.Println("\nRebuilding all watched packages...")
+						rebuildChan <- struct{}{}
 					}
 				}
 			}
@@ -155,6 +160,9 @@ func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}
 						log.Printf("Warning: Could not re-enable raw mode: %v", err)
 						return
 					}
+				} else if b[0] == 'b' || b[0] == 'B' {
+					fmt.Println("\nRebuilding all watched packages...")
+					rebuildChan <- struct{}{}
 				}
 			}
 		}
@@ -163,7 +171,7 @@ func startStdinListener(reselectChan chan<- struct{}, appendChan chan<- struct{}
 }
 
 // runWatchLoop manages the watcher lifecycle and package selection
-func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, reselectChan chan struct{}, appendChan chan struct{}) error {
+func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, reselectChan chan struct{}, appendChan chan struct{}, rebuildChan chan struct{}) error {
 	buildablePackages, err := helpers.FindNodePackages(projectPath)
 	if err != nil {
 		log.Fatal("Error selecting packages: ", err)
@@ -173,6 +181,7 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 	var (
 		selectedPackages []helpers.NodePackage
 		watcherStopChans []chan struct{}
+		rebuildChans     []chan struct{} // Channels to trigger rebuild for each package
 		wg               sync.WaitGroup
 	)
 
@@ -180,8 +189,9 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 		for i, pkg := range selectedPackages {
 			log.Printf("Selected package: %s\n", pkg.PackageJson.Name)
 			watcherStopChans[i] = make(chan struct{})
+			rebuildChans[i] = make(chan struct{}, 1)
 			wg.Add(1)
-			go watchForChanges(&wg, watcherStopChans[i], pkg, projectPath+"/webapp", !c.Bool("no-build"))
+			go watchForChanges(&wg, watcherStopChans[i], rebuildChans[i], pkg, projectPath+"/webapp", !c.Bool("no-build"))
 		}
 	}
 
@@ -191,8 +201,9 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 			pkg := selectedPackages[i]
 			log.Printf("Appended package: %s\n", pkg.PackageJson.Name)
 			watcherStopChans[i] = make(chan struct{})
+			rebuildChans[i] = make(chan struct{}, 1)
 			wg.Add(1)
-			go watchForChanges(&wg, watcherStopChans[i], pkg, projectPath+"/webapp", !c.Bool("no-build"))
+			go watchForChanges(&wg, watcherStopChans[i], rebuildChans[i], pkg, projectPath+"/webapp", !c.Bool("no-build"))
 		}
 	}
 
@@ -206,10 +217,11 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 	// Initial menu selection (no stdin goroutine running yet)
 	selectedPackages = helpers.SelectPackages(buildablePackages)
 	watcherStopChans = make([]chan struct{}, len(selectedPackages))
-	stopStdin := startStdinListener(reselectChan, appendChan)
+	rebuildChans = make([]chan struct{}, len(selectedPackages))
+	stopStdin := startStdinListener(reselectChan, appendChan, rebuildChan)
 	startWatchers()
 	
-	log.Println("Watching for changes. Press 'r' to reselect packages or 'a' to append additional packages.")
+	log.Println("Watching for changes. Press 'r' to reselect packages, 'a' to append additional packages, or 'b' to rebuild all.")
 
 	for {
 		select {
@@ -228,9 +240,21 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 			buildablePackages = helpers.GetBuildablePackages(buildablePackages)
 			selectedPackages = helpers.SelectPackages(buildablePackages)
 			watcherStopChans = make([]chan struct{}, len(selectedPackages))
-			stopStdin = startStdinListener(reselectChan, appendChan)
+			rebuildChans = make([]chan struct{}, len(selectedPackages))
+			stopStdin = startStdinListener(reselectChan, appendChan, rebuildChan)
 			startWatchers()
-			log.Println("Watching for changes. Press 'r' to reselect packages or 'a' to append additional packages.")
+			log.Println("Watching for changes. Press 'r' to reselect packages, 'a' to append additional packages, or 'b' to rebuild all.")
+		case <-rebuildChan:
+			// Trigger rebuild for all currently watched packages
+			log.Printf("Triggering rebuild for all %d watched package(s)...", len(selectedPackages))
+			for i := range selectedPackages {
+				select {
+				case rebuildChans[i] <- struct{}{}:
+					// Successfully queued rebuild
+				default:
+					// Build already queued, skip
+				}
+			}
 		case <-appendChan:
 			// Append additional packages without stopping existing watchers
 			buildablePackages, err = helpers.FindNodePackages(projectPath)
@@ -250,9 +274,11 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 				// Append to selected packages
 				selectedPackages = append(selectedPackages, additionalPackages...)
 				
-				// Extend watcherStopChans slice
+				// Extend watcherStopChans and rebuildChans slices
 				newStopChans := make([]chan struct{}, len(additionalPackages))
 				watcherStopChans = append(watcherStopChans, newStopChans...)
+				newRebuildChans := make([]chan struct{}, len(additionalPackages))
+				rebuildChans = append(rebuildChans, newRebuildChans...)
 				
 				// Start watchers only for the new packages
 				startAdditionalWatchers(previousSize)
@@ -287,7 +313,7 @@ func addDirsToWatcher(watcher *fsnotify.Watcher, rootPath string) error {
 	})
 }
 
-func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, pkg helpers.NodePackage, webappPath string, initialBuild bool) {
+func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, rebuildChan <-chan struct{}, pkg helpers.NodePackage, webappPath string, initialBuild bool) {
 	defer wg.Done()
 
 	// Create a package-specific logger
@@ -325,6 +351,14 @@ func watchForChanges(wg *sync.WaitGroup, stopChan <-chan struct{}, pkg helpers.N
 		case <-stopChan:
 			packageLogger.Printf("Stopping watcher for package: %s", pkg.PackageJson.Name)
 			return
+		case <-rebuildChan:
+			// Trigger rebuild for this package
+			select {
+			case buildChan <- struct{}{}:
+				packageLogger.Printf("Rebuild triggered for package: %s", pkg.PackageJson.Name)
+			default:
+				// Build already queued
+			}
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return

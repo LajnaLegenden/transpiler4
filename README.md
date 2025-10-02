@@ -72,8 +72,9 @@ While the watch command is running, you can use the following keyboard shortcuts
 
 - **Press 'r'**: Reselect packages - Stops all watchers and opens the package selection menu to choose packages from scratch
 - **Press 'a'**: Append packages - Opens the package selection menu to add additional packages to watch without stopping existing watchers
+- **Press 'b'**: Rebuild all - Triggers a rebuild of all currently watched packages without stopping the watchers
 
-The append functionality is particularly useful when you want to add more packages to watch without disrupting ongoing build processes.
+The append functionality is particularly useful when you want to add more packages to watch without disrupting ongoing build processes. The rebuild all functionality allows you to manually trigger a build of all packages when needed, such as after pulling changes from git.
 
 ### Build Command
 

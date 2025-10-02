@@ -83,6 +83,20 @@ This is particularly useful when you want to add more packages without disruptin
 4. `package-a` and `package-b` continue watching uninterrupted
 5. `package-c` watcher starts immediately
 
+#### Rebuild All Packages (Press 'b' or 'B')
+
+- Keeps all watchers running
+- Triggers an immediate rebuild of all currently watched packages
+- Useful after pulling changes from git or when you want to force a rebuild
+
+This is particularly useful when you've made changes that weren't detected by the file watcher (e.g., git checkout, external file changes) or when you want to verify all packages build correctly.
+
+**Example use cases:**
+- After running `git pull` or `git checkout` to rebuild with new code
+- After modifying shared configuration files
+- When you want to verify all watched packages build successfully
+- After changing environment variables or dependencies
+
 ### Examples
 
 #### Watch a monorepo from within the project
