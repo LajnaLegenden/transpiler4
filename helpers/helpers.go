@@ -284,6 +284,123 @@ func SelectPackages(packages []NodePackage) []NodePackage {
 	return selected
 }
 
+// SelectPackagesWithExisting allows selecting additional packages while showing currently watched packages
+// It marks already-watched packages and shows a two-column preview
+func SelectPackagesWithExisting(packages []NodePackage, existing []NodePackage) []NodePackage {
+	// Create a map of existing package names for quick lookup
+	existingMap := make(map[string]bool)
+	for _, pkg := range existing {
+		existingMap[pkg.PackageJson.Name] = true
+	}
+
+	// Create display names with [WATCHING] prefix for existing packages
+	displayNames := make([]string, len(packages))
+	for i, pkg := range packages {
+		if existingMap[pkg.PackageJson.Name] {
+			displayNames[i] = "[WATCHING] " + pkg.PackageJson.Name
+		} else {
+			displayNames[i] = pkg.PackageJson.Name
+		}
+	}
+
+	idx, err := fuzzyfinder.FindMulti(
+		packages,
+		func(i int) string {
+			return displayNames[i]
+		},
+		fuzzyfinder.WithPreviewWindow(func(i, w, h int) string {
+			// Calculate column widths for two-column preview
+			// Left column: ~60%, Right column: ~40%
+			leftColWidth := int(float64(w) * 0.6)
+			rightColWidth := int(float64(w) * 0.4)
+			if i == -1 {
+				// Show currently watching packages in right column
+				var rightCol strings.Builder
+				rightCol.WriteString("Currently Watching:\n")
+				rightCol.WriteString(strings.Repeat("-", rightColWidth-2))
+				rightCol.WriteString("\n")
+				if len(existing) == 0 {
+					rightCol.WriteString("(none)")
+				} else {
+					for _, pkg := range existing {
+						rightCol.WriteString(fmt.Sprintf("• %s\n", pkg.PackageJson.Name))
+					}
+				}
+				return rightCol.String()
+			}
+
+			// Left column: package details
+			var leftCol strings.Builder
+			pkg := packages[i]
+			leftCol.WriteString(fmt.Sprintf("Package: %s\n", pkg.PackageJson.Name))
+			leftCol.WriteString(fmt.Sprintf("Strategy: %s\n", pkg.Strategy))
+			if pkg.IsFrontend {
+				leftCol.WriteString("Type: Frontend\n")
+			}
+			leftCol.WriteString(fmt.Sprintf("Path: %s\n", pkg.Path))
+
+			// Right column: currently watching packages
+			var rightCol strings.Builder
+			rightCol.WriteString("Currently Watching:\n")
+			rightCol.WriteString(strings.Repeat("-", rightColWidth-2))
+			rightCol.WriteString("\n")
+			if len(existing) == 0 {
+				rightCol.WriteString("(none)")
+			} else {
+				for _, existingPkg := range existing {
+					rightCol.WriteString(fmt.Sprintf("• %s\n", existingPkg.PackageJson.Name))
+				}
+			}
+
+			// Combine columns
+			leftLines := strings.Split(leftCol.String(), "\n")
+			rightLines := strings.Split(rightCol.String(), "\n")
+			maxLines := len(leftLines)
+			if len(rightLines) > maxLines {
+				maxLines = len(rightLines)
+			}
+
+			var result strings.Builder
+			for j := 0; j < maxLines; j++ {
+				leftLine := ""
+				if j < len(leftLines) {
+					leftLine = leftLines[j]
+				}
+				rightLine := ""
+				if j < len(rightLines) {
+					rightLine = rightLines[j]
+				}
+
+				// Truncate lines to fit column widths
+				if len(leftLine) > leftColWidth {
+					leftLine = leftLine[:leftColWidth-3] + "..."
+				}
+				if len(rightLine) > rightColWidth {
+					rightLine = rightLine[:rightColWidth-3] + "..."
+				}
+
+				// Format with padding
+				result.WriteString(fmt.Sprintf("%-*s  %s\n", leftColWidth, leftLine, rightLine))
+			}
+
+			return result.String()
+		}))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Filter out packages that are already being watched
+	var newPackages []NodePackage
+	for _, index := range idx {
+		pkg := packages[index]
+		if !existingMap[pkg.PackageJson.Name] {
+			newPackages = append(newPackages, pkg)
+		}
+	}
+
+	return newPackages
+}
+
 func GetAbsolutePath(path string) (string, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
