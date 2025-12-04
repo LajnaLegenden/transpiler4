@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -183,7 +184,23 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 	}
 
 	// Initial menu selection (no stdin goroutine running yet)
-	packQueries := c.StringSlice("pack")
+	packQueriesRaw := c.StringSlice("pack")
+	var packQueries []string
+	// Expand comma-separated values (e.g., "pkg1,pkg2" -> ["pkg1", "pkg2"])
+	for _, query := range packQueriesRaw {
+		if query == "" {
+			continue
+		}
+		// Split by comma and trim whitespace
+		parts := strings.Split(query, ",")
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				packQueries = append(packQueries, trimmed)
+			}
+		}
+	}
+
 	if len(packQueries) > 0 {
 		// Use flag-based selection
 		selectedPackages = helpers.SelectPackagesByQuery(buildablePackages, packQueries)
