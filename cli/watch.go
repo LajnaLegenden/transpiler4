@@ -37,6 +37,11 @@ func WatchCommand() *cli.Command {
 				Aliases: []string{"n"},
 				Usage:   "Disable initial build when starting watch",
 			},
+			&cli.StringSliceFlag{
+				Name:    "pack",
+				Aliases: []string{"packages"},
+				Usage:   "Package name patterns to watch (fuzzy matched, skips interactive selection)",
+			},
 		},
 		Action: WatchAction,
 	}
@@ -178,7 +183,18 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 	}
 
 	// Initial menu selection (no stdin goroutine running yet)
-	selectedPackages = helpers.SelectPackages(buildablePackages)
+	packQueries := c.StringSlice("pack")
+	if len(packQueries) > 0 {
+		// Use flag-based selection
+		selectedPackages = helpers.SelectPackagesByQuery(buildablePackages, packQueries)
+		if len(selectedPackages) == 0 {
+			return fmt.Errorf("no packages found matching the provided patterns: %v", packQueries)
+		}
+		log.Printf("Selected %d package(s) based on patterns: %v\n", len(selectedPackages), packQueries)
+	} else {
+		// Use interactive selection
+		selectedPackages = helpers.SelectPackages(buildablePackages)
+	}
 	watcherStopChans = make([]chan struct{}, len(selectedPackages))
 	stdinListener := startStdinListener(addPackagesChan)
 	startWatchers()
