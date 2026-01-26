@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +37,11 @@ func WatchCommand() *cli.Command {
 				Name:    "no-build",
 				Aliases: []string{"n"},
 				Usage:   "Disable initial build when starting watch",
+			},
+			&cli.StringSliceFlag{
+				Name:    "pack",
+				Aliases: []string{"packages"},
+				Usage:   "Package name patterns to watch (fuzzy matched, skips interactive selection)",
 			},
 		},
 		Action: WatchAction,
@@ -70,6 +76,8 @@ func WatchAction(c *cli.Context) error {
 	stopChan := make(chan struct{})
 	// Channel to signal reselecting packages
 	reselectChan := make(chan struct{})
+	// Channel to signal adding packages
+	addPackagesChan := make(chan struct{})
 
 	// Set up signal handling
 	signalChan := make(chan os.Signal, 1)
@@ -82,32 +90,59 @@ func WatchAction(c *cli.Context) error {
 		close(stopChan)
 	}()
 
-	return runWatchLoop(c, projectPath, stopChan, reselectChan)
+	return runWatchLoop(c, projectPath, stopChan, reselectChan, addPackagesChan)
 }
 
-// startStdinListener starts a goroutine that listens for 'r' key and sends to reselectChan. Returns a stop channel to terminate the goroutine.
-func startStdinListener(reselectChan chan<- struct{}) chan struct{} {
+// stdinListenerResult holds the stop channel and wait group for the stdin listener
+type stdinListenerResult struct {
+	stopChan chan struct{}
+	done     *sync.WaitGroup
+}
+
+// startStdinListener starts a goroutine that listens for 'a' key and sends to addPackagesChan. 
+// Returns a result struct with stop channel and wait group to ensure clean shutdown.
+func startStdinListener(addPackagesChan chan<- struct{}) stdinListenerResult {
 	stopStdin := make(chan struct{})
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case <-stopStdin:
 				return
 			default:
 				var b [1]byte
-				os.Stdin.Read(b[:])
-				if b[0] == 'r' || b[0] == 'R' {
-					fmt.Println("\nReopening package selection menu...")
-					reselectChan <- struct{}{}
+				n, err := os.Stdin.Read(b[:])
+				if err != nil || n == 0 {
+					// Check if we should stop after read error
+					select {
+					case <-stopStdin:
+						return
+					default:
+						continue
+					}
+				}
+				// Check if we should stop after reading
+				select {
+				case <-stopStdin:
+					return
+				default:
+					// Only handle 'a' or 'A' keypress
+					if b[0] == 'a' || b[0] == 'A' {
+						fmt.Println("\nAdding packages to watch list...")
+						addPackagesChan <- struct{}{}
+					}
+					// All other keypresses are ignored (not consumed), allowing Ctrl+C and other signals to work normally
 				}
 			}
 		}
 	}()
-	return stopStdin
+	return stdinListenerResult{stopChan: stopStdin, done: wg}
 }
 
 // runWatchLoop manages the watcher lifecycle and package selection
-func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, reselectChan chan struct{}) error {
+func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, reselectChan chan struct{}, addPackagesChan chan struct{}) error {
 	buildablePackages, err := helpers.FindNodePackages(projectPath)
 	if err != nil {
 		log.Fatal("Error selecting packages: ", err)
@@ -129,6 +164,18 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 		}
 	}
 
+	addWatchers := func(newPackages []helpers.NodePackage) {
+		startIdx := len(selectedPackages)
+		selectedPackages = append(selectedPackages, newPackages...)
+		// Extend watcherStopChans slice and start watchers for new packages
+		for i, pkg := range newPackages {
+			log.Printf("Added package to watch: %s\n", pkg.PackageJson.Name)
+			watcherStopChans = append(watcherStopChans, make(chan struct{}))
+			wg.Add(1)
+			go watchForChanges(&wg, watcherStopChans[startIdx+i], pkg, projectPath+"/webapp", !c.Bool("no-build"))
+		}
+	}
+
 	stopWatchers := func() {
 		for _, ch := range watcherStopChans {
 			close(ch)
@@ -137,19 +184,48 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 	}
 
 	// Initial menu selection (no stdin goroutine running yet)
-	selectedPackages = helpers.SelectPackages(buildablePackages)
+	packQueriesRaw := c.StringSlice("pack")
+	var packQueries []string
+	// Expand comma-separated values (e.g., "pkg1,pkg2" -> ["pkg1", "pkg2"])
+	for _, query := range packQueriesRaw {
+		if query == "" {
+			continue
+		}
+		// Split by comma and trim whitespace
+		parts := strings.Split(query, ",")
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				packQueries = append(packQueries, trimmed)
+			}
+		}
+	}
+
+	if len(packQueries) > 0 {
+		// Use flag-based selection
+		selectedPackages = helpers.SelectPackagesByQuery(buildablePackages, packQueries)
+		if len(selectedPackages) == 0 {
+			return fmt.Errorf("no packages found matching the provided patterns: %v", packQueries)
+		}
+		log.Printf("Selected %d package(s) based on patterns: %v\n", len(selectedPackages), packQueries)
+	} else {
+		// Use interactive selection
+		selectedPackages = helpers.SelectPackages(buildablePackages)
+	}
 	watcherStopChans = make([]chan struct{}, len(selectedPackages))
-	stopStdin := startStdinListener(reselectChan)
+	stdinListener := startStdinListener(addPackagesChan)
 	startWatchers()
 
 	for {
 		select {
 		case <-stopChan:
-			close(stopStdin)
+			close(stdinListener.stopChan)
+			stdinListener.done.Wait()
 			stopWatchers()
 			return nil
 		case <-reselectChan:
-			close(stopStdin)
+			close(stdinListener.stopChan)
+			stdinListener.done.Wait()
 			stopWatchers()
 			// Reselect packages and restart watchers
 			buildablePackages, err = helpers.FindNodePackages(projectPath)
@@ -159,8 +235,41 @@ func runWatchLoop(c *cli.Context, projectPath string, stopChan <-chan struct{}, 
 			buildablePackages = helpers.GetBuildablePackages(buildablePackages)
 			selectedPackages = helpers.SelectPackages(buildablePackages)
 			watcherStopChans = make([]chan struct{}, len(selectedPackages))
-			stopStdin = startStdinListener(reselectChan)
+			stdinListener = startStdinListener(addPackagesChan)
 			startWatchers()
+		case <-addPackagesChan:
+			// Stop stdin listener to allow fuzzy finder to take control of stdin
+			close(stdinListener.stopChan)
+			// Wait for the goroutine to exit (it may be blocked on Read, so give it a moment)
+			// Use a goroutine to wait so we don't block, but ensure it's stopped before fuzzy finder
+			done := make(chan struct{})
+			go func() {
+				stdinListener.done.Wait()
+				close(done)
+			}()
+			// Wait a short time for the goroutine to exit, or proceed if it's taking too long
+			select {
+			case <-done:
+				// Goroutine exited cleanly
+			case <-time.After(100 * time.Millisecond):
+				// Timeout - proceed anyway (goroutine will exit eventually)
+			}
+			// Refresh buildable packages list
+			buildablePackages, err = helpers.FindNodePackages(projectPath)
+			if err != nil {
+				log.Fatal("Error finding packages: ", err)
+			}
+			buildablePackages = helpers.GetBuildablePackages(buildablePackages)
+			// Select new packages (excluding already watched ones)
+			newPackages := helpers.SelectPackagesWithExisting(buildablePackages, selectedPackages)
+			// Restart stdin listener after selection is complete
+			stdinListener = startStdinListener(addPackagesChan)
+			if len(newPackages) > 0 {
+				addWatchers(newPackages)
+				log.Printf("Added %d package(s) to watch list\n", len(newPackages))
+			} else {
+				log.Println("No new packages selected")
+			}
 		}
 	}
 }

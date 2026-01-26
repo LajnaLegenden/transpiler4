@@ -284,6 +284,278 @@ func SelectPackages(packages []NodePackage) []NodePackage {
 	return selected
 }
 
+// SelectPackagesWithExisting allows selecting additional packages while showing currently watched packages
+// It marks already-watched packages and shows a two-column preview
+func SelectPackagesWithExisting(packages []NodePackage, existing []NodePackage) []NodePackage {
+	// Create a map of existing package names for quick lookup
+	existingMap := make(map[string]bool)
+	for _, pkg := range existing {
+		existingMap[pkg.PackageJson.Name] = true
+	}
+
+	// Create display names with [WATCHING] prefix for existing packages
+	displayNames := make([]string, len(packages))
+	for i, pkg := range packages {
+		if existingMap[pkg.PackageJson.Name] {
+			displayNames[i] = "[WATCHING] " + pkg.PackageJson.Name
+		} else {
+			displayNames[i] = pkg.PackageJson.Name
+		}
+	}
+
+	idx, err := fuzzyfinder.FindMulti(
+		packages,
+		func(i int) string {
+			return displayNames[i]
+		},
+		fuzzyfinder.WithPreviewWindow(func(i, w, h int) string {
+			// Calculate column widths for two-column preview
+			// Left column: ~60%, Right column: ~40%
+			leftColWidth := int(float64(w) * 0.6)
+			rightColWidth := int(float64(w) * 0.4)
+			if i == -1 {
+				// Show currently watching packages in right column
+				var rightCol strings.Builder
+				rightCol.WriteString("Currently Watching:\n")
+				rightCol.WriteString(strings.Repeat("-", rightColWidth-2))
+				rightCol.WriteString("\n")
+				if len(existing) == 0 {
+					rightCol.WriteString("(none)")
+				} else {
+					for _, pkg := range existing {
+						rightCol.WriteString(fmt.Sprintf("• %s\n", pkg.PackageJson.Name))
+					}
+				}
+				return rightCol.String()
+			}
+
+			// Left column: package details
+			var leftCol strings.Builder
+			pkg := packages[i]
+			leftCol.WriteString(fmt.Sprintf("Package: %s\n", pkg.PackageJson.Name))
+			leftCol.WriteString(fmt.Sprintf("Strategy: %s\n", pkg.Strategy))
+			if pkg.IsFrontend {
+				leftCol.WriteString("Type: Frontend\n")
+			}
+			leftCol.WriteString(fmt.Sprintf("Path: %s\n", pkg.Path))
+
+			// Right column: currently watching packages
+			var rightCol strings.Builder
+			rightCol.WriteString("Currently Watching:\n")
+			rightCol.WriteString(strings.Repeat("-", rightColWidth-2))
+			rightCol.WriteString("\n")
+			if len(existing) == 0 {
+				rightCol.WriteString("(none)")
+			} else {
+				for _, existingPkg := range existing {
+					rightCol.WriteString(fmt.Sprintf("• %s\n", existingPkg.PackageJson.Name))
+				}
+			}
+
+			// Combine columns
+			leftLines := strings.Split(leftCol.String(), "\n")
+			rightLines := strings.Split(rightCol.String(), "\n")
+			maxLines := len(leftLines)
+			if len(rightLines) > maxLines {
+				maxLines = len(rightLines)
+			}
+
+			var result strings.Builder
+			for j := 0; j < maxLines; j++ {
+				leftLine := ""
+				if j < len(leftLines) {
+					leftLine = leftLines[j]
+				}
+				rightLine := ""
+				if j < len(rightLines) {
+					rightLine = rightLines[j]
+				}
+
+				// Truncate lines to fit column widths
+				if len(leftLine) > leftColWidth {
+					leftLine = leftLine[:leftColWidth-3] + "..."
+				}
+				if len(rightLine) > rightColWidth {
+					rightLine = rightLine[:rightColWidth-3] + "..."
+				}
+
+				// Format with padding
+				result.WriteString(fmt.Sprintf("%-*s  %s\n", leftColWidth, leftLine, rightLine))
+			}
+
+			return result.String()
+		}))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Filter out packages that are already being watched
+	var newPackages []NodePackage
+	for _, index := range idx {
+		pkg := packages[index]
+		if !existingMap[pkg.PackageJson.Name] {
+			newPackages = append(newPackages, pkg)
+		}
+	}
+
+	return newPackages
+}
+
+// packageMatch represents a package with its match score
+type packageMatch struct {
+	pkg   NodePackage
+	score int
+}
+
+// FuzzyMatchPackages performs fuzzy matching on packages based on a query string
+// Returns packages sorted by match quality (best match first)
+func FuzzyMatchPackages(packages []NodePackage, query string) []NodePackage {
+	if query == "" {
+		return packages
+	}
+
+	queryLower := strings.ToLower(query)
+	var matches []packageMatch
+
+	for _, pkg := range packages {
+		name := pkg.PackageJson.Name
+		nameLower := strings.ToLower(name)
+
+		score := 0
+
+		// Exact match gets highest score
+		if nameLower == queryLower {
+			score = 10000
+		} else if strings.HasPrefix(nameLower, queryLower) {
+			// Starts with query gets high score
+			score = 5000
+		} else if strings.Contains(nameLower, queryLower) {
+			// Contains query as substring gets medium score
+			// Prefer matches that start earlier in the string
+			idx := strings.Index(nameLower, queryLower)
+			score = 3000 - idx
+		} else {
+			// Check if all characters in query appear in order in name (fuzzy match)
+			if fuzzyMatch(nameLower, queryLower) {
+				// Calculate score based on how compact the match is
+				score = calculateFuzzyScore(nameLower, queryLower)
+			}
+		}
+
+		if score > 0 {
+			matches = append(matches, packageMatch{pkg: pkg, score: score})
+		}
+	}
+
+	// Sort by score (descending)
+	for i := 0; i < len(matches)-1; i++ {
+		for j := i + 1; j < len(matches); j++ {
+			if matches[i].score < matches[j].score {
+				matches[i], matches[j] = matches[j], matches[i]
+			}
+		}
+	}
+
+	// Extract packages from matches
+	result := make([]NodePackage, len(matches))
+	for i, m := range matches {
+		result[i] = m.pkg
+	}
+
+	return result
+}
+
+// fuzzyMatch checks if all characters in query appear in order in text
+func fuzzyMatch(text, query string) bool {
+	if len(query) == 0 {
+		return true
+	}
+	if len(text) == 0 {
+		return false
+	}
+
+	queryIdx := 0
+	for i := 0; i < len(text) && queryIdx < len(query); i++ {
+		if text[i] == query[queryIdx] {
+			queryIdx++
+		}
+	}
+
+	return queryIdx == len(query)
+}
+
+// calculateFuzzyScore calculates a score for fuzzy matches
+// Higher score = better match (more compact, earlier start)
+func calculateFuzzyScore(text, query string) int {
+	if len(query) == 0 {
+		return 0
+	}
+
+	// Find the shortest span that contains all query characters in order
+	bestStart := -1
+	minSpan := len(text) + 1
+
+	// Try all possible starting positions
+	for start := 0; start < len(text); start++ {
+		queryIdx := 0
+		for i := start; i < len(text) && queryIdx < len(query); i++ {
+			if text[i] == query[queryIdx] {
+				queryIdx++
+				if queryIdx == len(query) {
+					span := i - start + 1
+					if span < minSpan {
+						minSpan = span
+						bestStart = start
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if bestStart == -1 {
+		return 0
+	}
+
+	// Score based on span compactness and position
+	// More compact matches (smaller span) get higher scores
+	// Earlier matches get slightly higher scores
+	spanScore := 1000 - minSpan*10
+	positionScore := (len(text) - bestStart) / 10
+
+	return spanScore + positionScore
+}
+
+// SelectPackagesByQuery selects packages based on multiple query strings
+// For each query, it finds the best matching package and adds it to the result
+// Duplicates are automatically avoided
+func SelectPackagesByQuery(packages []NodePackage, queries []string) []NodePackage {
+	if len(queries) == 0 {
+		return []NodePackage{}
+	}
+
+	selectedMap := make(map[string]NodePackage)
+	var selected []NodePackage
+
+	for _, query := range queries {
+		if query == "" {
+			continue
+		}
+
+		matches := FuzzyMatchPackages(packages, query)
+		if len(matches) > 0 {
+			bestMatch := matches[0]
+			// Avoid duplicates
+			if _, exists := selectedMap[bestMatch.PackageJson.Name]; !exists {
+				selectedMap[bestMatch.PackageJson.Name] = bestMatch
+				selected = append(selected, bestMatch)
+			}
+		}
+	}
+
+	return selected
+}
+
 func GetAbsolutePath(path string) (string, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
